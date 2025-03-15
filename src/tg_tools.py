@@ -1,12 +1,10 @@
 import argparse
 import logging
-
-import yaml
 from telethon import TelegramClient
 
 from . import utils
 from . import config as cfg
-
+from . import downloader
 logger = logging.getLogger(__name__)
 
 
@@ -27,9 +25,6 @@ class TGTools:
         dialogs = await utils.get_dialogs(self.client)
         for dialog_id, name in dialogs.items():
             logger.info(f"{dialog_id} : {name}")
-        with open(cfg.DIALOGS_PATH, "wt", encoding="utf-8") as f:
-            yaml.dump(dialogs, f, allow_unicode=True)
-        logger.info(f"dialogs has been write to: {cfg.DIALOGS_PATH}")
 
     async def clear_personal_chats(self, args):
         """
@@ -43,8 +38,7 @@ class TGTools:
         """
         下载媒体文件
         """
-        # 下载媒体文件
-        # 在这里实现下载逻辑
+        await downloader.download_by_config(self.client,self.config)
 
     def create_args(self):
         # 配置argparse
@@ -69,8 +63,9 @@ class TGTools:
         parser_download = subparsers.add_parser('download', help=self.download_media.__doc__)
         parser_download.add_argument(
             'dialog_id',
+            nargs='*',
             type=int,
-            help='Dialog ID to download from'
+            help='Dialog ID to download from, if empty, download all from config'
         )
         parser_download.set_defaults(func=self.download_media)
         return parser

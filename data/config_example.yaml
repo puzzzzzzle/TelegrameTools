@@ -2,24 +2,30 @@ api_id: YOUR_API_ID
 api_hash: YOUR_API_HASH
 download:
   # Path for saving downloaded files
-  path: "./downloads"
+  path: "downloads"
   # Prefix format for saved files
   file_path_prefix:
-    - chat_title
-    - media_datetime
+    chat_title: true
+    # "" if not need, format str if need
+#    media_datetime: ""
+    media_datetime: "%Y-%m"
+
   # Chats and media types to download
   chats_to_download:
     # Both chat ID and chat name are acceptable
-    group_name_1:
-      - audio
-      - document
-      - photo
-      - video
-      - voice
-      - animation #gif
-    group_name_2:
-      - all
-    chat_name_1:
-      - photo
-    chat_id:
-      - video
+    "group_name_1":
+      media_types:
+        - audio
+        - document
+        - photo
+        - video
+        - voice
+    "group_name_2":
+      media_types:
+        - all
+    "chat_name_1":
+      media_types:
+        - photo
+    "chat_id":
+      media_types:
+        - video

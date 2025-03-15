@@ -1,16 +1,25 @@
+import yaml
 from telethon import TelegramClient
 import telethon.tl.functions as fns
 import logging
+from . import config as cfg
 
 logger = logging.getLogger(__name__)
 
 
-async def get_dialogs(client: TelegramClient) -> dict[str, str]:
+async def get_dialogs(client: TelegramClient, use_cache=False) -> dict[str, str]:
     # 获取所有对话
     result = {}
+    if use_cache and cfg.DIALOGS_PATH.exists():
+        with open(cfg.DIALOGS_PATH, "rt", encoding="utf-8") as f:
+            result = yaml.safe_load(f)
+            return result
     dialogs = await client.get_dialogs()
     for dialog in dialogs:
-        result[dialog.id] = dialog.name
+        result[str(dialog.id)] = str(dialog.name)
+    with open(cfg.DIALOGS_PATH, "wt", encoding="utf-8") as f:
+        yaml.dump(result, f, allow_unicode=True)
+    logger.info(f"dialogs has been write to: {cfg.DIALOGS_PATH}")
     return result
 
 
