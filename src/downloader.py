@@ -5,6 +5,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+def _needs_download():
+    pass
 
 async def download_one_chat(client: TelegramClient, target_chat: int, download_path: str):
     """
@@ -16,6 +18,10 @@ async def download_one_chat(client: TelegramClient, target_chat: int, download_p
     """
     # 获取目标对话
     chat = await client.get_entity(target_chat)
+
+    # 获取对话中的消息总数
+    total_messages = (await client.get_messages(chat, limit=0)).total
+    logger.info(f"Total messages in chat: {total_messages}")
 
     # 获取对话中的消息
     async for message in client.iter_messages(chat):

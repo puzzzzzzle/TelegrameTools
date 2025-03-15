@@ -1,3 +1,4 @@
 **/*
 !.gitignore
 !config_example.yaml
+!file_format.yaml

@@ -4,6 +4,7 @@ from pathlib import Path
 DATA_PATH = Path("./data")
 CONFIG_PATH = DATA_PATH / "config.yaml"
 SESSION_PATH = DATA_PATH / "session"
+DIALOGS_PATH = DATA_PATH / "dialogs.yaml"
 
 
 def _init_data_path():

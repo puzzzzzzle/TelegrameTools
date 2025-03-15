@@ -3,7 +3,7 @@ import os
 import logging
 import argparse
 import sys
-from src.tg_tools import TGTools,create_args
+from src.tg_tools import TGTools
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s | %(name)s | [%(levelname)s] | %(filename)s:%(lineno)d | %(message)s')
@@ -13,7 +13,7 @@ async def main():
     logger.info(f"Start at path {os.getcwd()}")
     # 创建客户端
     tools = TGTools()
-    parser = create_args(tools)
+    parser = tools.create_args()
 
     # 解析参数
     if len(sys.argv) == 1:
@@ -21,10 +21,7 @@ async def main():
         sys.exit(1)
 
     args = parser.parse_args()
-    async with tools.client:
-        await tools.start()
-        # 执行对应命令
-        await args.func(args)
+    await tools.run_args(args)
 
 
 # 运行脚本
