@@ -1,0 +1,7 @@
+api_id: YOUR_API_ID
+api_hash: YOUR_API_HASH
+download_path: downloads
+target_chats:
+  - TARGET_CHAT_ID_OR_USERNAME_1
+  - TARGET_CHAT_ID_OR_USERNAME_2
+  - TARGET_CHAT_ID_OR_USERNAME_3
