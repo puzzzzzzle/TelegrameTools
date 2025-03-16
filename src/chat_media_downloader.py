@@ -1,9 +1,10 @@
 import asyncio
 import datetime
+import shutil
 
 from telethon import TelegramClient
 import logging
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, DocumentAttributeFilename
 from pathlib import Path
 from . import utils
 from . import config as cfg
@@ -48,7 +49,7 @@ class MediaDownloadTask(DownloadTaskBase):
         await client.download_media(message.media, temp_path.as_posix())
 
         # 移动到目标路径
-        file_path.parent.mkdir(parents=True,exist_ok=True)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path.rename(file_path.as_posix())
         logger.info(f"Downloaded {file_name}")
 
@@ -74,54 +75,63 @@ class ChatMediaDownloader:
         assert isinstance(self.media_datetime, str)
         self.media_types = set(self.self_config["media_types"])
 
-    def _needs_download(self, message) -> bool:
-        if "all" in self.media_types:
-            return True
-        if isinstance(message, MessageMediaPhoto) and "photo" in self.media_types:
-            return True
-
-        if isinstance(message.media, MessageMediaDocument):
-            # 根据文档类型进一步判断
-            document = message.media.document
-            if document is None:
-                return False
-            # todo: 检查文件类型
-            # 检查文件类型
-            for attr in document.attributes:
-                if hasattr(attr, 'video') and "video" in self.media_types:
-                    return True
-                if hasattr(attr, 'voice') and "voice" in self.media_types:
-                    return True
-                if hasattr(attr, 'document') and "document" in self.media_types:
-                    return True
-            # 如果未匹配到特定类型，但允许下载文档
-            if "document" in self.media_types:
-                return True
-        return False
-
-    def _get_file_name(self, message) -> str | None:
-        result = self.file_name_base
-        if self.media_datetime != "":
-            date: datetime.datetime = message.date
-            format_data = date.strftime("%Y-%m")
-            result += f"/{format_data}"
-        if isinstance(message, MessageMediaPhoto) and "photo" in self.media_types:
-            date: datetime.datetime = message.date
-            file_name = f"{message.id}_{date.strftime('%Y%m%d_%H%M%S')}.jpg"
-            result += f"/{file_name}"
-            return result
-        # 如果消息有媒体文件，尝试获取媒体文件名
+    @staticmethod
+    def get_media_meta(message):
+        name = ""
+        media_type = "Unknown"
         if message.media and isinstance(message.media, MessageMediaDocument):
             document = message.media.document
-            if document:
-                # 查找文件名属性
-                for attr in document.attributes:
-                    if hasattr(attr, 'file_name'):
-                        file_name = attr.file_name
-                        result += f"/{file_name}"
-                        return result
+            date = document.date
+            for attr in document.attributes:
+                if isinstance(attr, DocumentAttributeFilename):
+                    name = attr.file_name
+            media_type_list = str(document.mime_type).split("/")
+            if len(media_type) > 0:
+                media_type = media_type_list[0]
 
-        return None
+        return name, media_type
+
+    async def download_msg(self, message, download_path):
+        # 获取基础信息
+        msg_id = message.id
+        date: datetime.datetime = message.date
+        if isinstance(message, MessageMediaPhoto):
+            name = f"{msg_id}"
+            media_type = "photo"
+            pass
+        elif message.media:
+            name, media_type = self.get_media_meta(message)
+        else:
+            return
+
+        # 类型过滤
+        if "all" not in self.media_types and media_type not in self.media_types:
+            return
+
+        target_path = download_path
+        if self.media_datetime != "":
+            target_path = download_path / date.strftime(self.media_datetime)
+        file_name = f"{id} - {name}"
+        file_path = target_path / file_name
+
+        # 检查文件是否已经存在
+        if file_path.exists():
+            logger.info(f"File {file_name} already exists, skipping...")
+            return
+
+        # TODO 临时代码: 如果 target_path 文件夹下有以 id 开头的文件, 且后缀相同, 就也认为也下载过了, 重命名过去吧
+        for existing_file in target_path.iterdir():
+            if existing_file.is_file() and existing_file.name.startswith(f"{msg_id}"):
+                existing_suffix = existing_file.suffix
+                new_suffix = file_path.suffix
+                if existing_suffix == new_suffix:
+                    logger.info(
+                        f"File {existing_file.name} already exists with the same suffix, renaming to {file_name}...")
+                    shutil.move(existing_file, file_path)
+                    return
+
+        task = MediaDownloadTask(self.chat_id, self.chat_name, file_name, message, file_path, 3)
+        await self.download_worker.push_download_task(task)
 
     async def create_all_download_tasks(self):
         """
@@ -144,23 +154,10 @@ class ChatMediaDownloader:
 
         # 获取对话中的消息
         async for message in client.iter_messages(chat):
-            if message.media:
-                if not self._needs_download(message):
-                    continue
-                file_name = self._get_file_name(message)
-
-                if file_name is None:
-                    logger.error(f"Failed to get file name for message {message.id}")
-                    continue
-
-                file_path = download_path / file_name
-
-                # 检查文件是否已经存在
-                if file_path.exists():
-                    logger.info(f"File {file_name} already exists, skipping...")
-                    continue
-                task = MediaDownloadTask(self.chat_id, self.chat_name, file_name, message, file_path, 3)
-                await self.download_worker.push_download_task(task)
+            try:
+                await self.download_msg(message)
+            except Exception as e:
+                logger.error(f"download fail {e}")
 
 
 async def download_by_config(client: TelegramClient, config: dict):
@@ -181,11 +178,12 @@ async def download_by_config(client: TelegramClient, config: dict):
             # 如果有多个匹配项，只取第一个
             chat_id = matching_keys[0]
             chat_name = key
-            if len(matching_keys) >1:
+            if len(matching_keys) > 1:
                 logger.warning(f"multiple matching keys found: {matching_keys}, use {chat_id} instead")
 
         # 创建下载任务
-        curr_chat_downloader = ChatMediaDownloader(client, config, int(chat_id), chat_name, chat_config,download_worker)
+        curr_chat_downloader = ChatMediaDownloader(client, config, int(chat_id), chat_name, chat_config,
+                                                   download_worker)
         downloaders.append(curr_chat_downloader)
     await asyncio.gather(*[x.create_all_download_tasks() for x in downloaders])
     # 等待下载完毕
