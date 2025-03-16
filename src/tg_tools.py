@@ -4,7 +4,7 @@ from telethon import TelegramClient
 
 from . import utils
 from . import config as cfg
-from . import downloader
+from . import chat_media_downloader
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +38,7 @@ class TGTools:
         """
         下载媒体文件
         """
-        await downloader.download_by_config(self.client,self.config)
+        await chat_media_downloader.download_by_config(self.client,self.config)
 
     def create_args(self):
         # 配置argparse
