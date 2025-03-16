@@ -5,10 +5,13 @@ import argparse
 import sys
 from src.tg_tools import TGTools
 
+# log_format = '%(asctime)s | [%(levelname)s] | %(message)s | %(name)s | %(filename)s:%(lineno)d'
+log_format = '%(asctime)s | [%(levelname)s] | %(message)s'
 logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s | [%(levelname)s] | %(message)s | %(name)s | %(filename)s:%(lineno)d')
+                    format=log_format)
 logging.getLogger("telethon").setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
+
 
 async def main():
     logger.info(f"Start at path {os.getcwd()}")

@@ -19,7 +19,8 @@ class MediaDownloadTask(DownloadTaskBase):
     下载任务
     """
 
-    def __init__(self, chat_id: int, chat_name: str, file_name: str, message, file_path: Path, max_retry_count,tag:str):
+    def __init__(self, chat_id: int, chat_name: str, file_name: str, message, file_path: Path, max_retry_count,
+                 tag: str):
         super().__init__(max_retry_count)
         self.chat_id = chat_id
         self.chat_name = chat_name
@@ -30,7 +31,7 @@ class MediaDownloadTask(DownloadTaskBase):
         pass
 
     def __str__(self):
-        return f"DownloadTask(chat_name={self.chat_name}, file_name={self.file_name}, retry_count={self.retry_count}, tag={self.tag}, file_path={self.file_path})"
+        return f"({self.chat_name}; {self.tag}; {self.file_path})"
 
     async def download(self, client: TelegramClient):
         """
@@ -47,13 +48,13 @@ class MediaDownloadTask(DownloadTaskBase):
         temp_path.unlink(missing_ok=True)
 
         # 下载媒体文件, 先下载到 tmp 目录, 再移动到目标目录
-        logger.info(f"Downloading {file_name}...")
+        logger.info(f"beg {file_path}")
         await client.download_media(message.media, temp_path.as_posix())
 
         # 移动到目标路径
         file_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path.rename(file_path.as_posix())
-        logger.info(f"Downloaded {file_name}")
+        logger.info(f"end {file_path}")
 
 
 class ChatMediaDownloader:
@@ -95,7 +96,7 @@ class ChatMediaDownloader:
 
         return name, media_type
 
-    async def download_msg(self, message,tag:str):
+    async def download_msg(self, message, tag: str):
         download_path = Path(self.config["download"]["path"])
         # 获取基础信息
         msg_id = message.id
@@ -114,16 +115,16 @@ class ChatMediaDownloader:
         if "all" not in self.media_types and media_type not in self.media_types:
             return
 
-        target_path = download_path
+        target_path = download_path / self.chat_name
         if self.media_datetime != "":
-            target_path = download_path / date.strftime(self.media_datetime)
+            target_path = target_path / date.strftime(self.media_datetime)
         target_path.mkdir(parents=True, exist_ok=True)
         media_name = f"{msg_id} - {name}"
         target_save_path = target_path / media_name
 
         # 检查文件是否已经存在
         if target_save_path.exists():
-            logger.info(f"File {media_name} already exists, skipping...")
+            logger.info(f"cached {target_save_path}")
             return
 
         # TODO 临时代码: 如果 target_path 文件夹下有以 id 开头的文件, 且后缀相同, 就也认为也下载过了, 重命名过去吧
@@ -133,11 +134,11 @@ class ChatMediaDownloader:
                 new_suffix = target_save_path.suffix
                 if existing_suffix == new_suffix:
                     logger.info(
-                        f"File {existing_file.name} already exists with the same suffix, renaming to {media_name}...")
+                        f"cached {target_save_path}; already exists with the same suffix, renaming to {media_name}")
                     shutil.move(existing_file, target_save_path)
                     return
 
-        task = MediaDownloadTask(self.chat_id, self.chat_name, media_name, message, target_save_path, 3,tag)
+        task = MediaDownloadTask(self.chat_id, self.chat_name, media_name, message, target_save_path, 3, tag)
         await self.download_worker.push_download_task(task)
 
     async def create_all_download_tasks(self):
@@ -161,11 +162,12 @@ class ChatMediaDownloader:
         # 获取对话中的消息
         count = 0
         async for message in client.iter_messages(chat, reverse=True):
-            count +=1
+            count += 1
             try:
-                await self.download_msg(message,f"{count}/{total_messages}")
+                await self.download_msg(message, f"{count}/{total_messages}")
             except Exception as e:
                 logger.error(f"download fail {e}")
+
 
 async def download_by_config(client: TelegramClient, config: dict):
     dialogs: dict[str, str] = await utils.get_dialogs(client, use_cache=True)

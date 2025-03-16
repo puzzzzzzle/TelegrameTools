@@ -8,7 +8,7 @@ download:
     chat_title: true
     # "" if not need, format str if need
 #    media_datetime: ""
-    media_datetime: "%Y-%m"
+    media_datetime: "%Y_%m"
 
   # Chats and media types to download
   chats_to_download:

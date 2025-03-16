@@ -170,9 +170,6 @@ class DownloadWorkerMng:
             for _ in range(max(1, worker_thread_num))]
         pass
 
-    def simple_stat(self) -> str:
-        return f"{self.total_parallel_downloading()}R;{self.downloading_tasks.qsize()}P;"
-
     async def on_task_create(self, task):
         logger.info(f"+++ {self.simple_stat()}; {task}")
         pass
@@ -240,6 +237,9 @@ class DownloadWorkerMng:
 
     def is_stopped(self):
         return self.stopped.is_set()
+
+    def simple_stat(self) -> str:
+        return f"{self.total_parallel_downloading()}R;{self.downloading_tasks.qsize()}P;"
 
     def stat(self):
         """
