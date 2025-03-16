@@ -61,7 +61,7 @@ class DownloadWorker:
     async def try_download_one(self):
         client = self.client
         try:
-            task: DownloadTaskBase = await self.download_tasks.get_nowait()
+            task: DownloadTaskBase = self.download_tasks.get_nowait()
         except asyncio.QueueEmpty as e:
             return
 
@@ -171,15 +171,15 @@ class DownloadWorkerMng:
         pass
 
     async def on_task_create(self, task):
-        logger.info(f"on_task_create: {task}")
+        logger.info(f"on_task_create pending: {self.downloading_tasks.qsize()}; task: {task}")
         pass
 
     async def on_task_finished(self, task):
-        logger.info(f"on_task_finished: {task}")
+        logger.info(f"on_task_finished pending: {self.downloading_tasks.qsize()}; task: {task}")
         pass
 
     async def on_task_error(self, task):
-        logger.info(f"on_task_error: {task}")
+        logger.info(f"on_task_errorpending: {self.downloading_tasks.qsize()}; task: {task}")
         if task.retry_count < task.max_retry_count:
             await self.downloading_tasks.put(task)
         else:
@@ -191,13 +191,13 @@ class DownloadWorkerMng:
         while not self.stopped.is_set():
             # 完成下载任务
             try:
-                finished_task = await self.finished_tasks.get_nowait()
+                finished_task = self.finished_tasks.get_nowait()
                 await self.on_task_finished(finished_task)
             except asyncio.QueueEmpty:
                 pass
             # 失败下载任务
             try:
-                error_task = await self.error_tasks.get_nowait()
+                error_task = self.error_tasks.get_nowait()
                 await self.on_task_error(error_task)
             except asyncio.QueueEmpty:
                 pass
@@ -225,12 +225,12 @@ class DownloadWorkerMng:
             # 不阻塞启动协程
             asyncio.create_task(self.main())
 
-    def push_download_task(self, task: DownloadTaskBase):
+    async def push_download_task(self, task: DownloadTaskBase):
         """
         添加下载任务, 异步线程会 从 chat_tasks 中获取任务, 逐个执行
         """
-        self.downloading_tasks.put(task)
-        self.on_task_create(task)
+        await self.downloading_tasks.put(task)
+        await self.on_task_create(task)
 
     def mark_stopped(self):
         self.stopped.set()

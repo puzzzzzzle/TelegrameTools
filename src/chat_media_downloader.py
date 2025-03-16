@@ -48,6 +48,7 @@ class MediaDownloadTask(DownloadTaskBase):
         await client.download_media(message.media, temp_path.as_posix())
 
         # 移动到目标路径
+        file_path.parent.mkdir(parents=True,exist_ok=True)
         temp_path.rename(file_path.as_posix())
         logger.info(f"Downloaded {file_name}")
 
@@ -159,7 +160,7 @@ class ChatMediaDownloader:
                     logger.info(f"File {file_name} already exists, skipping...")
                     continue
                 task = MediaDownloadTask(self.chat_id, self.chat_name, file_name, message, file_path, 3)
-                self.download_worker.push_download_task(task)
+                await self.download_worker.push_download_task(task)
 
 
 async def download_by_config(client: TelegramClient, config: dict):
