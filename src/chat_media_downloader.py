@@ -28,7 +28,7 @@ class MediaDownloadTask(DownloadTaskBase):
         pass
 
     def __str__(self):
-        return f"DownloadTask(chat_name={self.chat_name}, file_name={self.file_name}, retry_count={self.retry_count})"
+        return f"DownloadTask(chat_name={self.chat_name}, file_name={self.file_name}, retry_count={self.retry_count}, file_path={self.file_path})"
 
     async def download(self, client: TelegramClient):
         """
@@ -77,11 +77,13 @@ class ChatMediaDownloader:
 
     @staticmethod
     def get_media_meta(message):
-        name = ""
+        name = None
         media_type = "Unknown"
-        if message.media and isinstance(message.media, MessageMediaDocument):
+        if isinstance(message.media, MessageMediaPhoto):
+            name = f"photo.jpg"
+            media_type = "photo"
+        if isinstance(message.media, MessageMediaDocument):
             document = message.media.document
-            date = document.date
             for attr in document.attributes:
                 if isinstance(attr, DocumentAttributeFilename):
                     name = attr.file_name
@@ -91,7 +93,8 @@ class ChatMediaDownloader:
 
         return name, media_type
 
-    async def download_msg(self, message, download_path):
+    async def download_msg(self, message):
+        download_path = Path(self.config["download"]["path"])
         # 获取基础信息
         msg_id = message.id
         date: datetime.datetime = message.date
@@ -103,7 +106,8 @@ class ChatMediaDownloader:
             name, media_type = self.get_media_meta(message)
         else:
             return
-
+        if name is None:
+            return
         # 类型过滤
         if "all" not in self.media_types and media_type not in self.media_types:
             return
@@ -111,26 +115,27 @@ class ChatMediaDownloader:
         target_path = download_path
         if self.media_datetime != "":
             target_path = download_path / date.strftime(self.media_datetime)
-        file_name = f"{id} - {name}"
-        file_path = target_path / file_name
+        target_path.mkdir(parents=True, exist_ok=True)
+        media_name = f"{msg_id} - {name}"
+        target_save_path = target_path / media_name
 
         # 检查文件是否已经存在
-        if file_path.exists():
-            logger.info(f"File {file_name} already exists, skipping...")
+        if target_save_path.exists():
+            logger.info(f"File {media_name} already exists, skipping...")
             return
 
         # TODO 临时代码: 如果 target_path 文件夹下有以 id 开头的文件, 且后缀相同, 就也认为也下载过了, 重命名过去吧
         for existing_file in target_path.iterdir():
             if existing_file.is_file() and existing_file.name.startswith(f"{msg_id}"):
                 existing_suffix = existing_file.suffix
-                new_suffix = file_path.suffix
+                new_suffix = target_save_path.suffix
                 if existing_suffix == new_suffix:
                     logger.info(
-                        f"File {existing_file.name} already exists with the same suffix, renaming to {file_name}...")
-                    shutil.move(existing_file, file_path)
+                        f"File {existing_file.name} already exists with the same suffix, renaming to {media_name}...")
+                    shutil.move(existing_file, target_save_path)
                     return
 
-        task = MediaDownloadTask(self.chat_id, self.chat_name, file_name, message, file_path, 3)
+        task = MediaDownloadTask(self.chat_id, self.chat_name, media_name, message, target_save_path, 3)
         await self.download_worker.push_download_task(task)
 
     async def create_all_download_tasks(self):
@@ -144,7 +149,6 @@ class ChatMediaDownloader:
         # 获取目标对话
         client = self.client
         target_chat = self.chat_id
-        download_path = Path(self.config["download"]["path"])
         logger.info(f"start create tasks for {self.chat_name}")
         chat = await client.get_entity(target_chat)
 
@@ -153,12 +157,11 @@ class ChatMediaDownloader:
         logger.info(f"Total messages in chat: {total_messages}")
 
         # 获取对话中的消息
-        async for message in client.iter_messages(chat):
+        async for message in client.iter_messages(chat, reverse=True):
             try:
                 await self.download_msg(message)
             except Exception as e:
                 logger.error(f"download fail {e}")
-
 
 async def download_by_config(client: TelegramClient, config: dict):
     dialogs: dict[str, str] = await utils.get_dialogs(client, use_cache=True)
@@ -188,6 +191,6 @@ async def download_by_config(client: TelegramClient, config: dict):
     await asyncio.gather(*[x.create_all_download_tasks() for x in downloaders])
     # 等待下载完毕
     while not download_worker.is_all_done():
-        download_worker.mark_stopped()
         await asyncio.sleep(10)
+    download_worker.mark_stopped()
     download_worker.wait_all_thread()
