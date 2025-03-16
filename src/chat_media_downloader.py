@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import shutil
+from operator import index
 
 from telethon import TelegramClient
 import logging
@@ -18,17 +19,18 @@ class MediaDownloadTask(DownloadTaskBase):
     下载任务
     """
 
-    def __init__(self, chat_id: int, chat_name: str, file_name: str, message, file_path: Path, max_retry_count):
+    def __init__(self, chat_id: int, chat_name: str, file_name: str, message, file_path: Path, max_retry_count,tag:str):
         super().__init__(max_retry_count)
         self.chat_id = chat_id
         self.chat_name = chat_name
         self.file_name = file_name
         self.message = message
         self.file_path = file_path
+        self.tag = tag
         pass
 
     def __str__(self):
-        return f"DownloadTask(chat_name={self.chat_name}, file_name={self.file_name}, retry_count={self.retry_count}, file_path={self.file_path})"
+        return f"DownloadTask(chat_name={self.chat_name}, file_name={self.file_name}, retry_count={self.retry_count}, tag={self.tag}, file_path={self.file_path})"
 
     async def download(self, client: TelegramClient):
         """
@@ -93,7 +95,7 @@ class ChatMediaDownloader:
 
         return name, media_type
 
-    async def download_msg(self, message):
+    async def download_msg(self, message,tag:str):
         download_path = Path(self.config["download"]["path"])
         # 获取基础信息
         msg_id = message.id
@@ -135,7 +137,7 @@ class ChatMediaDownloader:
                     shutil.move(existing_file, target_save_path)
                     return
 
-        task = MediaDownloadTask(self.chat_id, self.chat_name, media_name, message, target_save_path, 3)
+        task = MediaDownloadTask(self.chat_id, self.chat_name, media_name, message, target_save_path, 3,tag)
         await self.download_worker.push_download_task(task)
 
     async def create_all_download_tasks(self):
@@ -157,9 +159,11 @@ class ChatMediaDownloader:
         logger.info(f"Total messages in chat: {total_messages}")
 
         # 获取对话中的消息
+        count = 0
         async for message in client.iter_messages(chat, reverse=True):
+            count +=1
             try:
-                await self.download_msg(message)
+                await self.download_msg(message,f"{count}/{total_messages}")
             except Exception as e:
                 logger.error(f"download fail {e}")
 

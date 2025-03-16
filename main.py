@@ -6,7 +6,7 @@ import sys
 from src.tg_tools import TGTools
 
 logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s | %(name)s | [%(levelname)s] | %(filename)s:%(lineno)d | %(message)s')
+                    format='%(asctime)s | [%(levelname)s] | %(message)s | %(name)s | %(filename)s:%(lineno)d')
 logging.getLogger("telethon").setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
 

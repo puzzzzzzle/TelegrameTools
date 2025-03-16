@@ -170,16 +170,19 @@ class DownloadWorkerMng:
             for _ in range(max(1, worker_thread_num))]
         pass
 
+    def simple_stat(self) -> str:
+        return f"{self.total_parallel_downloading()}R;{self.downloading_tasks.qsize()}P;"
+
     async def on_task_create(self, task):
-        logger.info(f"on_task_create pending: {self.downloading_tasks.qsize()}; task: {task}")
+        logger.info(f"+++ {self.simple_stat()}; {task}")
         pass
 
     async def on_task_finished(self, task):
-        logger.info(f"on_task_finished pending: {self.downloading_tasks.qsize()}; task: {task}")
+        logger.info(f"--- {self.simple_stat()}; {task}")
         pass
 
     async def on_task_error(self, task):
-        logger.info(f"on_task_errorpending: {self.downloading_tasks.qsize()}; task: {task}")
+        logger.info(f"err {task}")
         if task.retry_count < task.max_retry_count:
             await self.downloading_tasks.put(task)
         else:
@@ -265,6 +268,12 @@ class DownloadWorkerMng:
             if worker.get_curr_parallel() > 0:
                 return False
         return True
+
+    def total_parallel_downloading(self):
+        total = 0
+        for worker in self.workers:
+            total += worker.get_curr_parallel()
+        return total
 
     def wait_all_thread(self):
         if self.thread is not None:
