@@ -31,7 +31,7 @@ class MediaDownloadTask(DownloadTaskBase):
         pass
 
     def __str__(self):
-        return f"({self.chat_name}; {self.tag}; {self.file_path})"
+        return f"{self.file_path}; {self.chat_name}; {self.tag};"
 
     async def download(self, client: TelegramClient):
         """
