@@ -171,19 +171,19 @@ class DownloadWorkerMng:
         pass
 
     async def on_task_create(self, task):
-        logger.info(f"+++ {self.simple_stat()}; {task}")
+        logger.info(f"+++ {task} ; stat: {self.simple_stat()}")
         pass
 
     async def on_task_finished(self, task):
-        logger.info(f"--- {self.simple_stat()}; {task}")
+        logger.info(f"--- {task} ; stat: {self.simple_stat()}")
         pass
 
     async def on_task_error(self, task):
-        logger.info(f"err {task}")
         if task.retry_count < task.max_retry_count:
             await self.downloading_tasks.put(task)
+            logger.info(f"rty {task}")
         else:
-            logger.error(f"task {task} over max retry count")
+            logger.error(f"err {task}")
             pass
         pass
 
