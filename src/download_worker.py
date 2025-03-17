@@ -1,13 +1,15 @@
 import asyncio
+import datetime
+import json
 import logging
 import math
 import threading
-import weakref
-from pathlib import Path
+from typing import Callable
 
 from telethon import TelegramClient
 
 from . import config as cfg
+from .config import DATA_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -17,34 +19,47 @@ class DownloadTaskBase:
     下载任务
     """
 
-    def __init__(self, max_retry_count: int):
+    def __init__(self, max_retry_count: int, no_data_recv_time: int):
+        """
+        下载任务
+        :param max_retry_count: 最大重试次数
+        :param no_data_recv_time: 没有收到数据, 最大等待时间
+        """
         self.retry_count = 0
         self.max_retry_count = max_retry_count
+        self.no_data_recv_time = no_data_recv_time
 
+        # task_id, task_tag, last_recv_time,  recv_bytes, total_bytes
+        self.on_downloader_net_callback: Callable[[int, str, float, int, int], None] | None = None
+        self.task_id = None
         pass
 
     async def download(self, client: TelegramClient):
         pass
 
+    def __str__(self):
+        return f"task_{self.task_id}"
 
 class DownloadWorker:
     """
     下载工作线程
     """
 
-    def __init__(self, mng: "DownloadWorkerMng", max_parallel: int, download_tasks: asyncio.Queue,
+    def __init__(self, index: int, stop_event: threading.Event, max_parallel: int, download_tasks: asyncio.Queue,
                  finished_tasks: asyncio.Queue,
                  error_tasks: asyncio.Queue):
-        self.mng = weakref.ref(mng)
+        self.index = index
+        self.stop_event = stop_event
         self.max_parallel = max_parallel
         self.download_tasks = download_tasks
         self.finished_tasks = finished_tasks
         self.error_tasks = error_tasks
 
-        self.client: TelegramClient = None
+        self.client: TelegramClient | None = None
 
         self.curr_parallel = 0
         self.curr_parallel_lock = threading.Lock()  # 创建一个锁
+        self.task_status = {}
 
     def increment_curr_parallel(self):
         with self.curr_parallel_lock:  # 加锁
@@ -58,6 +73,40 @@ class DownloadWorker:
         with self.curr_parallel_lock:  # 加锁
             return self.curr_parallel
 
+    def on_task_net_stat_event(self, task_id: int, task_tag: str, last_recv_time: float, recv_bytes: int,
+                               total_bytes: int):
+        self.task_status[task_id] = {
+            "task_tag": task_tag,
+            "last_recv_time": last_recv_time,
+            "recv_bytes": recv_bytes,
+            "total_bytes": total_bytes,
+        }
+
+    def dump_status(self):
+        """
+        保存状态统计信息
+        :return:
+        """
+        status = {
+            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "curr_parallel": self.curr_parallel,
+            "task_status": self.task_status
+        }
+        status_show = {}
+        for k, v in status["task_status"].items():
+            status_show[k] = {
+                "task_tag": v["task_tag"],
+                "last_recv_time": datetime.datetime.fromtimestamp(v["last_recv_time"]).strftime("%Y-%m-%d %H:%M:%S"),
+                "progress": math.ceil(v["recv_bytes"] / v["total_bytes"] * 100),
+                "total_bytes": v["total_bytes"],
+            }
+        logger.debug(f"Worker{self.index} status:{status}")
+        try:
+            with open(DATA_PATH / f"Worker{self.index}.status", "wt") as f:
+                json.dump(status_show, f, indent=4)
+        except Exception as e:
+            logger.error(f"dump status error: {e}")
+
     async def try_download_one(self):
         client = self.client
         try:
@@ -66,6 +115,8 @@ class DownloadWorker:
             return
 
         self.increment_curr_parallel()
+        self.task_status[task.task_id] = {}
+        task.on_downloader_net_callback = self.on_task_net_stat_event
         try:
             await task.download(client)
             self.download_tasks.task_done()
@@ -80,12 +131,17 @@ class DownloadWorker:
                 await self.error_tasks.put(task)
         finally:
             self.decrement_curr_parallel()
+            del self.task_status[task.task_id]
 
     async def run_until_stop(self, client: TelegramClient):
         assert self.client is None
         self.client = client
 
-        while not self.mng().is_stopped():
+        last_dump_status_time = datetime.datetime.now()
+        while not self.stop_event.is_set():
+            if datetime.datetime.now() - last_dump_status_time > datetime.timedelta(seconds=3):
+                self.dump_status()
+                last_dump_status_time = datetime.datetime.now()
             if self.curr_parallel < self.max_parallel:
                 # 创建一个下载任务, 不要等待
                 asyncio.create_task(self.try_download_one())
@@ -107,6 +163,7 @@ class DownloadWorker:
         :return:
         """
 
+        # TODO 拷贝主 session
         # 用 asyncio 的独立循环, 最大并行 max_parallel 进行下载
         async def _run():
             # 创建 TelegramClient
@@ -148,6 +205,7 @@ class DownloadWorkerMng:
         if self.mng_use_thread and worker_thread_num == 0:
             logger.warning("mng_use_thread is True, but worker_thread_num is 0, use worker_thread_num = 1")
             self.worker_thread_num = 1
+        self.last_task_id = 0
 
         # 配置
         self.worker_thread_num = worker_thread_num
@@ -165,10 +223,19 @@ class DownloadWorkerMng:
 
         # workers
         self.workers = [
-            DownloadWorker(self, self.worker_max_parallel, self.downloading_tasks, self.finished_tasks,
+            DownloadWorker(i, self.stopped, self.worker_max_parallel, self.downloading_tasks, self.finished_tasks,
                            self.error_tasks)
-            for _ in range(max(1, worker_thread_num))]
+            for i in range(max(1, worker_thread_num))]
         pass
+
+    async def push_download_task(self, task: DownloadTaskBase):
+        """
+        添加下载任务, 异步线程会 从 chat_tasks 中获取任务, 逐个执行
+        """
+        self.last_task_id += 1
+        task.task_id = self.last_task_id
+        await self.downloading_tasks.put(task)
+        await self.on_task_create(task)
 
     async def on_task_create(self, task):
         logger.info(f"+++ {task} ; stat: {self.simple_stat()}")
@@ -224,13 +291,6 @@ class DownloadWorkerMng:
         else:
             # 不阻塞启动协程
             asyncio.create_task(self.main())
-
-    async def push_download_task(self, task: DownloadTaskBase):
-        """
-        添加下载任务, 异步线程会 从 chat_tasks 中获取任务, 逐个执行
-        """
-        await self.downloading_tasks.put(task)
-        await self.on_task_create(task)
 
     def mark_stopped(self):
         self.stopped.set()

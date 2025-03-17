@@ -5,9 +5,16 @@ import argparse
 import sys
 from src.tg_tools import TGTools
 
-# log_format = '%(asctime)s | [%(levelname)s] | %(message)s | %(name)s | %(filename)s:%(lineno)d'
-log_format = '%(asctime)s | [%(levelname)s] | %(message)s'
-logging.basicConfig(level=logging.INFO,
+DEBUG = True
+if DEBUG:
+    log_format = '%(asctime)s | [%(levelname)s] | %(message)s | %(name)s | %(filename)s:%(lineno)d'
+    asyncio.get_event_loop().set_debug(True)
+    log_level = logging.DEBUG
+else:
+    log_format = '%(asctime)s | [%(levelname)s] | %(message)s'
+    log_level = logging.INFO
+
+logging.basicConfig(level=log_level,
                     format=log_format)
 logging.getLogger("telethon").setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)

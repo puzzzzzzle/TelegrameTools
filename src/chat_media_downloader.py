@@ -19,9 +19,9 @@ class MediaDownloadTask(DownloadTaskBase):
     下载任务
     """
 
-    def __init__(self, chat_id: int, chat_name: str, file_name: str, message, file_path: Path, max_retry_count,
-                 tag: str):
-        super().__init__(max_retry_count)
+    def __init__(self, max_retry_count, no_data_recv_time: int, chat_id: int, chat_name: str, file_name: str, message,
+                 file_path: Path, tag: str):
+        super().__init__(max_retry_count, no_data_recv_time)
         self.chat_id = chat_id
         self.chat_name = chat_name
         self.file_name = file_name
@@ -31,7 +31,7 @@ class MediaDownloadTask(DownloadTaskBase):
         pass
 
     def __str__(self):
-        return f"[{self.file_path}; {self.chat_name}; {self.tag}];"
+        return f"[{self.task_id}; {self.file_path}; {self.chat_name}; {self.tag}];"
 
     async def download(self, client: TelegramClient):
         """
@@ -49,8 +49,35 @@ class MediaDownloadTask(DownloadTaskBase):
 
         # 下载媒体文件, 先下载到 tmp 目录, 再移动到目标目录
         logger.info(f"beg {file_path}")
-        await client.download_media(message.media, temp_path.as_posix())
 
+        # 记录最后一次收到数据的时间
+        last_progress_time = asyncio.get_event_loop().time()
+
+        def callback(current, total):
+            nonlocal last_progress_time
+            # 更新最后一次收到数据的时间
+            last_progress_time = asyncio.get_event_loop().time()
+            logger.debug(f"{file_path} : {current} / {total}")
+            if self.on_downloader_net_callback is not None:
+                self.on_downloader_net_callback(self.task_id,f"{self.chat_name} - {self.file_path.name} - {self.tag}",last_progress_time,current, total)
+
+        # 下载, 每次有收据时更新收到的时间
+        async def download_with_timeout():
+            while True:
+                # 检查是否超时
+                if asyncio.get_event_loop().time() - last_progress_time > self.no_data_recv_time:
+                    raise asyncio.TimeoutError("long time not recv data, canceled")
+                # 尝试下载
+                try:
+                    await asyncio.wait_for(
+                        client.download_media(message.media, temp_path.as_posix(), progress_callback=callback),
+                        timeout=10  # 每次等待 10 秒
+                    )
+                    break  # 下载完成，退出循环
+                except asyncio.TimeoutError:
+                    continue  # 继续检查超时
+
+        await download_with_timeout()
         # 移动到目标路径
         file_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path.rename(file_path.as_posix())
@@ -138,15 +165,12 @@ class ChatMediaDownloader:
                     shutil.move(existing_file, target_save_path)
                     return
 
-        task = MediaDownloadTask(self.chat_id, self.chat_name, media_name, message, target_save_path, 3, tag)
+        task = MediaDownloadTask(3, 60, self.chat_id, self.chat_name, media_name, message, target_save_path, tag)
         await self.download_worker.push_download_task(task)
 
     async def create_all_download_tasks(self):
         """
         下载对话中的所有媒体文件到指定目录
-        :param client:
-        :param target_chat:
-        :param download_path:
         :return:
         """
         # 获取目标对话
