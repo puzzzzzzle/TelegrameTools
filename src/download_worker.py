@@ -104,7 +104,7 @@ class DownloadWorker:
                     "task_tag": v["task_tag"],
                     "time_use": str(datetime.datetime.now() - v["start_time"]),
                     "last_recv_time": v["last_recv_time"].strftime("%Y-%m-%d %H:%M:%S"),
-                    "progress": f'{math.ceil(v["recv_bytes"] / v["total_bytes"] * 100)} ({v["recv_bytes"]}/{v["total_bytes"]})',
+                    "progress": f'{v["recv_bytes"] / v["total_bytes"]:.2%} ({v["recv_bytes"] / 1024 / 1024:.2f} MB / {v["total_bytes"] / 1024 / 1024:.2f} MB)',
                 }
             logger.debug(f"Worker{self.index} status:{status_show}")
             with open(DATA_PATH / f"Worker{self.index}.status", "wt", encoding="utf-8") as f:

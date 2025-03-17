@@ -65,19 +65,17 @@ class MediaDownloadTask(DownloadTaskBase):
 
         # 下载, 每次有收据时更新收到的时间
         async def download_with_timeout():
+            task = asyncio.create_task(
+                client.download_media(message.media, temp_path.as_posix(), progress_callback=callback))
             while True:
                 # 检查是否超时
                 if asyncio.get_event_loop().time() - last_progress_time > self.no_data_recv_time:
                     raise asyncio.TimeoutError("long time not recv data, canceled")
-                # 尝试下载
-                try:
-                    await asyncio.wait_for(
-                        client.download_media(message.media, temp_path.as_posix(), progress_callback=callback),
-                        timeout=10  # 每次等待 10 秒
-                    )
-                    break  # 下载完成，退出循环
-                except asyncio.TimeoutError:
-                    continue  # 继续检查超时
+                # 检查任务是否完成
+                if not task.done():
+                    await asyncio.sleep(10)
+                else:
+                    break
 
         await download_with_timeout()
         # 移动到目标路径
