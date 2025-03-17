@@ -29,8 +29,9 @@ class DownloadTaskBase:
         self.max_retry_count = max_retry_count
         self.no_data_recv_time = no_data_recv_time
 
-        # task_id, task_tag, last_recv_time,  recv_bytes, total_bytes
-        self.on_downloader_net_callback: Callable[[int, str, float, int, int], None] | None = None
+        # task_id, task_tag, start_time,last_recv_time,  recv_bytes, total_bytes
+        self.on_downloader_net_callback: Callable[[int, str, datetime.datetime, datetime.datetime, int,
+                                                   int], None] | None = None
         self.task_id = None
         pass
 
@@ -39,6 +40,7 @@ class DownloadTaskBase:
 
     def __str__(self):
         return f"task_{self.task_id}"
+
 
 class DownloadWorker:
     """
@@ -73,10 +75,12 @@ class DownloadWorker:
         with self.curr_parallel_lock:  # 加锁
             return self.curr_parallel
 
-    def on_task_net_stat_event(self, task_id: int, task_tag: str, last_recv_time: float, recv_bytes: int,
+    def on_task_net_stat_event(self, task_id: int, task_tag: str, start_time: datetime.datetime,
+                               last_recv_time: datetime.datetime, recv_bytes: int,
                                total_bytes: int):
         self.task_status[task_id] = {
             "task_tag": task_tag,
+            "start_time": start_time,
             "last_recv_time": last_recv_time,
             "recv_bytes": recv_bytes,
             "total_bytes": total_bytes,
@@ -87,23 +91,24 @@ class DownloadWorker:
         保存状态统计信息
         :return:
         """
-        status = {
-            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "curr_parallel": self.curr_parallel,
-            "task_status": self.task_status
-        }
-        status_show = {}
-        for k, v in status["task_status"].items():
-            status_show[k] = {
-                "task_tag": v["task_tag"],
-                "last_recv_time": datetime.datetime.fromtimestamp(v["last_recv_time"]).strftime("%Y-%m-%d %H:%M:%S"),
-                "progress": math.ceil(v["recv_bytes"] / v["total_bytes"] * 100),
-                "total_bytes": v["total_bytes"],
-            }
-        logger.debug(f"Worker{self.index} status:{status}")
         try:
-            with open(DATA_PATH / f"Worker{self.index}.status", "wt") as f:
-                json.dump(status_show, f, indent=4)
+            status_show = {
+                "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "curr_parallel": self.curr_parallel,
+            }
+            v: dict
+            for k, v in self.task_status.items():
+                if len(v) == 0:
+                    continue
+                status_show[k] = {
+                    "task_tag": v["task_tag"],
+                    "time_use": str(datetime.datetime.now() - v["start_time"]),
+                    "last_recv_time": v["last_recv_time"].strftime("%Y-%m-%d %H:%M:%S"),
+                    "progress": f'{math.ceil(v["recv_bytes"] / v["total_bytes"] * 100)} ({v["recv_bytes"]}/{v["total_bytes"]})',
+                }
+            logger.debug(f"Worker{self.index} status:{status_show}")
+            with open(DATA_PATH / f"Worker{self.index}.status", "wt", encoding="utf-8") as f:
+                json.dump(status_show, f, indent=4, ensure_ascii=False)
         except Exception as e:
             logger.error(f"dump status error: {e}")
 
@@ -133,7 +138,7 @@ class DownloadWorker:
             self.decrement_curr_parallel()
             del self.task_status[task.task_id]
 
-    async def run_until_stop(self, client: TelegramClient):
+    async def main(self, client: TelegramClient):
         assert self.client is None
         self.client = client
 
@@ -155,7 +160,7 @@ class DownloadWorker:
         :return:
         """
         # 创建协程, 不等待
-        asyncio.create_task(self.run_until_stop(client))
+        asyncio.create_task(self.main(client))
 
     def thread_main(self):
         """
@@ -164,24 +169,25 @@ class DownloadWorker:
         """
 
         # TODO 拷贝主 session
+        raise NotImplementedError("Not implemented")
         # 用 asyncio 的独立循环, 最大并行 max_parallel 进行下载
-        async def _run():
-            # 创建 TelegramClient
-            client = TelegramClient(
-                session=cfg.SESSION_NAME,
-                api_id=cfg.API_ID,
-                api_hash=cfg.API_HASH
-            )
-
-            # 启动客户端
-            async with client:
-                await client.start()
-                await self.run_until_stop(client)
-
-        # 创建独立的事件循环并运行
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(_run())
+        # async def _run():
+        #     # 创建 TelegramClient
+        #     client = TelegramClient(
+        #         session=cfg.SESSION_NAME,
+        #         api_id=cfg.API_ID,
+        #         api_hash=cfg.API_HASH
+        #     )
+        #
+        #     # 启动客户端
+        #     async with client:
+        #         await client.start()
+        #         await self.main(client)
+        #
+        # # 创建独立的事件循环并运行
+        # loop = asyncio.new_event_loop()
+        # asyncio.set_event_loop(loop)
+        # loop.run_until_complete(_run())
 
     def thread_start(self):
         t = threading.Thread(target=self.thread_main)

@@ -49,6 +49,7 @@ class MediaDownloadTask(DownloadTaskBase):
 
         # 下载媒体文件, 先下载到 tmp 目录, 再移动到目标目录
         logger.info(f"beg {file_path}")
+        start_time = datetime.datetime.now()
 
         # 记录最后一次收到数据的时间
         last_progress_time = asyncio.get_event_loop().time()
@@ -59,7 +60,8 @@ class MediaDownloadTask(DownloadTaskBase):
             last_progress_time = asyncio.get_event_loop().time()
             logger.debug(f"{file_path} : {current} / {total}")
             if self.on_downloader_net_callback is not None:
-                self.on_downloader_net_callback(self.task_id,f"{self.chat_name} - {self.file_path.name} - {self.tag}",last_progress_time,current, total)
+                self.on_downloader_net_callback(self.task_id, f"{self.chat_name} - {self.file_path.name} - {self.tag}",
+                                                start_time, datetime.datetime.now(), current, total)
 
         # 下载, 每次有收据时更新收到的时间
         async def download_with_timeout():

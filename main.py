@@ -9,7 +9,7 @@ DEBUG = True
 if DEBUG:
     log_format = '%(asctime)s | [%(levelname)s] | %(message)s | %(name)s | %(filename)s:%(lineno)d'
     asyncio.get_event_loop().set_debug(True)
-    log_level = logging.DEBUG
+    log_level = logging.INFO
 else:
     log_format = '%(asctime)s | [%(levelname)s] | %(message)s'
     log_level = logging.INFO
