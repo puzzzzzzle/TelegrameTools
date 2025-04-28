@@ -109,6 +109,7 @@ class ChatMediaDownloader:
     def get_media_meta(message):
         name = None
         media_type = "Unknown"
+        media_size = 1
         if isinstance(message.media, MessageMediaPhoto):
             name = f"photo.jpg"
             media_type = "photo"
@@ -117,11 +118,12 @@ class ChatMediaDownloader:
             for attr in document.attributes:
                 if isinstance(attr, DocumentAttributeFilename):
                     name = attr.file_name
+            media_size = document.size
             media_type_list = str(document.mime_type).split("/")
             if len(media_type) > 0:
                 media_type = media_type_list[0]
 
-        return name, media_type
+        return name, media_type,media_size
 
     async def download_msg(self, message, tag: str):
         download_path = Path(self.config["download"]["path"])
@@ -131,9 +133,11 @@ class ChatMediaDownloader:
         if isinstance(message, MessageMediaPhoto):
             name = f"{msg_id}"
             media_type = "photo"
+            media_size = 1
+            # media_size = message.photo.sizes
             pass
         elif message.media:
-            name, media_type = self.get_media_meta(message)
+            name, media_type, media_size = self.get_media_meta(message)
         else:
             return
         if name is None:
@@ -151,19 +155,12 @@ class ChatMediaDownloader:
 
         # 检查文件是否已经存在
         if target_save_path.exists():
-            logger.info(f"cached {target_save_path}")
-            return
-
-        # TODO 临时代码: 如果 target_path 文件夹下有以 id 开头的文件, 且后缀相同, 就也认为也下载过了, 重命名过去吧
-        for existing_file in target_path.iterdir():
-            if existing_file.is_file() and existing_file.name.startswith(f"{msg_id}"):
-                existing_suffix = existing_file.suffix
-                new_suffix = target_save_path.suffix
-                if existing_suffix == new_suffix:
-                    logger.info(
-                        f"cached {target_save_path}; already exists with the same suffix, renaming to {media_name}")
-                    shutil.move(existing_file, target_save_path)
-                    return
+            # 大小也相同
+            if target_save_path.stat().st_size >= media_size:
+                logger.debug(f"cached {target_save_path}")
+                return
+            logger.warning(f"target file exists but size not match, redownload {target_save_path.stat().st_size}/{media_size}: {target_save_path}")
+            target_save_path.unlink(missing_ok=True)
 
         task = MediaDownloadTask(3, 60, self.chat_id, self.chat_name, media_name, message, target_save_path, tag)
         await self.download_worker.push_download_task(task)
