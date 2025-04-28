@@ -1,15 +1,16 @@
 import asyncio
+import copy
 import datetime
-import shutil
-from operator import index
 
 from telethon import TelegramClient
 import logging
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, DocumentAttributeFilename
 from pathlib import Path
+
 from . import utils
 from . import config as cfg
-from .download_worker import DownloadTaskBase, DownloadWorkerMng
+from .download_worker import DownloadTaskBase, DownloadWorkerMng, DownloadingInfo
+from .config import get_id_cache_path
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +20,10 @@ class MediaDownloadTask(DownloadTaskBase):
     下载任务
     """
 
-    def __init__(self, max_retry_count, no_data_recv_time: int, chat_id: int, chat_name: str, file_name: str, message,
+    def __init__(self, msg_id, max_retry_count, no_data_recv_time: int, chat_id: int, chat_name: str, file_name: str,
+                 message,
                  file_path: Path, tag: str):
-        super().__init__(max_retry_count, no_data_recv_time)
-        self.chat_id = chat_id
+        super().__init__(max_retry_count, no_data_recv_time, msg_id, chat_id)
         self.chat_name = chat_name
         self.file_name = file_name
         self.message = message
@@ -90,13 +91,14 @@ class ChatMediaDownloader:
     """
 
     def __init__(self, client: TelegramClient, config: dict, chat_id: int, chat_name: str, self_config: dict,
-                 download_worker: DownloadWorkerMng):
+                 download_worker: DownloadWorkerMng, run_forever=False):
         self.client = client
         self.config = config
         self.chat_id = chat_id
         self.chat_name = chat_name
         self.self_config = self_config
         self.download_worker = download_worker
+        self.run_forever = run_forever
 
         chat_title = config["download"]["file_path_prefix"]["chat_title"]
         assert isinstance(chat_title, bool)
@@ -123,9 +125,9 @@ class ChatMediaDownloader:
             if len(media_type) > 0:
                 media_type = media_type_list[0]
 
-        return name, media_type,media_size
+        return name, media_type, media_size
 
-    async def download_msg(self, message, tag: str):
+    async def download_msg(self, message, tag: str) -> bool:
         download_path = Path(self.config["download"]["path"])
         # 获取基础信息
         msg_id = message.id
@@ -139,12 +141,12 @@ class ChatMediaDownloader:
         elif message.media:
             name, media_type, media_size = self.get_media_meta(message)
         else:
-            return
+            return True
         if name is None:
-            return
+            return True
         # 类型过滤
         if "all" not in self.media_types and media_type not in self.media_types:
-            return
+            return True
 
         target_path = download_path / self.chat_name
         if self.media_datetime != "":
@@ -157,13 +159,16 @@ class ChatMediaDownloader:
         if target_save_path.exists():
             # 大小也相同
             if target_save_path.stat().st_size >= media_size:
-                logger.debug(f"cached {target_save_path}")
-                return
-            logger.warning(f"target file exists but size not match, redownload {target_save_path.stat().st_size}/{media_size}: {target_save_path}")
+                logger.info(f"cached {target_save_path}")
+                return True
+            logger.warning(
+                f"target file exists but size not match, redownload {target_save_path.stat().st_size}/{media_size}: {target_save_path}")
             target_save_path.unlink(missing_ok=True)
 
-        task = MediaDownloadTask(3, 60, self.chat_id, self.chat_name, media_name, message, target_save_path, tag)
+        task = MediaDownloadTask(msg_id, 3, 60, self.chat_id, self.chat_name, media_name, message, target_save_path,
+                                 tag)
         await self.download_worker.push_download_task(task)
+        return False
 
     async def create_all_download_tasks(self):
         """
@@ -180,19 +185,33 @@ class ChatMediaDownloader:
         total_messages = (await client.get_messages(chat, limit=0)).total
         logger.info(f"Total messages in chat: {total_messages}")
 
+        # 获取之前的下载进度
+        info_path = get_id_cache_path(self.chat_id)
+        s = DownloadingInfo.load_from_file(info_path)
+
+        tmp_ids: list[int] = copy.deepcopy(s.downloading_ids)
+        tmp_ids.append(s.max_finished_id)
+        min_id = min(tmp_ids)
+        min_id = max(0, min_id - 5) # 防止漏
+        logger.info(f"{self.chat_name}:  min_id: {min_id}")
+        s.max_finished_id = min_id
+        s.downloading_ids.clear()
+        s.save_to_file(info_path)
         # 获取对话中的消息
-        count = 0
-        async for message in client.iter_messages(chat, reverse=True):
+        count = min_id
+        async for message in client.iter_messages(chat, reverse=True, min_id=min_id):
             count += 1
             try:
-                await self.download_msg(message, f"{count}/{total_messages}")
+                already_finished = await self.download_msg(message, f"{count}/{total_messages}")
+                if already_finished:
+                    DownloadingInfo.on_task_finish_impl(message.id, get_id_cache_path(self.chat_id))
             except Exception as e:
                 logger.error(f"download fail {e}")
 
 
 async def download_by_config(client: TelegramClient, config: dict):
     dialogs: dict[str, str] = await utils.get_dialogs(client, use_cache=True)
-    download_worker = DownloadWorkerMng()
+    download_worker = DownloadWorkerMng(config)
     download_worker.start(client)
     downloaders = []
     for key, chat_config in config["download"]["chats_to_download"].items():

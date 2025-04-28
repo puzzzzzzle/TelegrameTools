@@ -1,25 +1,87 @@
 import asyncio
+import dataclasses
 import datetime
 import json
 import logging
 import math
 import threading
+from pathlib import Path
 from typing import Callable
+import pickle
 
 from telethon import TelegramClient
 
 from . import config as cfg
-from .config import DATA_PATH
+from .config import DATA_PATH,get_id_cache_path
 
 logger = logging.getLogger(__name__)
 
 
+@dataclasses.dataclass
+class DownloadingInfo:
+    max_finished_id:int = 0
+    downloading_ids:list[int]= dataclasses.field(default_factory=list)
+
+
+    def save_to_file(self, file_path: str | Path):
+        """
+        使用pickle将对象序列化到文件
+        :param file_path: 文件保存路径
+        """
+        with open(file_path, 'wb') as f:
+            pickle.dump(self, f)
+
+
+    @classmethod
+    def load_from_file(cls, file_path: str | Path) -> "DownloadingInfo":
+        """
+        从pickle文件反序列化对象
+        :param file_path: 文件读取路径
+        :return: DownloadingInfo实例
+        """
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        if not file_path.exists():
+            return cls()
+        with open(file_path, 'rb') as f:
+            return pickle.load(f)
+    @classmethod
+    def on_task_finish(cls,task):
+        msg_id = task.msg_id
+        file_path = get_id_cache_path(task.chat_id)
+        return cls.on_task_finish_impl(msg_id,file_path)
+    @classmethod
+    def on_task_finish_impl(cls,msg_id,file_path):
+        try:
+            s = DownloadingInfo.load_from_file(file_path)
+            try:
+                s.downloading_ids.remove(msg_id)
+            except ValueError:
+                pass
+            if msg_id>s.max_finished_id:
+                s.max_finished_id=msg_id
+            s.save_to_file(file_path)
+        except Exception as e:
+            logger.error(f"save to file error: {e}")
+            logger.exception(e)
+        pass
+    @classmethod
+    def on_task_create(cls,task):
+        msg_id = task.msg_id
+        file_path = get_id_cache_path(task.chat_id)
+        try:
+            s = DownloadingInfo.load_from_file(file_path)
+            s.downloading_ids.append(msg_id)
+            s.save_to_file(file_path)
+        except Exception as e:
+            logger.error(f"save to file error: {e}")
+            logger.exception(e)
+        pass
 class DownloadTaskBase:
     """
     下载任务
     """
 
-    def __init__(self, max_retry_count: int, no_data_recv_time: int):
+    def __init__(self, max_retry_count: int, no_data_recv_time: int, msg_id: int, chat_id: int):
         """
         下载任务
         :param max_retry_count: 最大重试次数
@@ -28,6 +90,8 @@ class DownloadTaskBase:
         self.retry_count = 0
         self.max_retry_count = max_retry_count
         self.no_data_recv_time = no_data_recv_time
+        self.msg_id = msg_id
+        self.chat_id = chat_id
 
         # task_id, task_tag, start_time,last_recv_time,  recv_bytes, total_bytes
         self.on_downloader_net_callback: Callable[[int, str, datetime.datetime, datetime.datetime, int,
@@ -200,11 +264,12 @@ class DownloadWorkerMng:
     下载任务管理器, 多线程+多协程 同时下载
     """
 
-    def __init__(self, worker_thread_num: int = 0, max_parallel: int = 5, mng_use_thread: bool = False):
+    def __init__(self, config, worker_thread_num: int = 0, max_parallel: int = 5, mng_use_thread: bool = False):
         """
         下载管理器, 支持当前线程/启动任意个独立线程
         :param worker_thread_num: 工作线程数量, 如果为 0 , 就在当前线程的 asyncio 中运行
         """
+        self.config = config
         self.thread = None
         self.mng_use_thread = mng_use_thread
         # mng 使用线程, 下载也得用线程
@@ -245,10 +310,12 @@ class DownloadWorkerMng:
 
     async def on_task_create(self, task):
         logger.info(f"+++ {task} ; stat: {self.simple_stat()}")
+        DownloadingInfo.on_task_create(task)
         pass
 
-    async def on_task_finished(self, task):
+    async def on_task_finished(self, task: DownloadTaskBase):
         logger.info(f"--- {task} ; stat: {self.simple_stat()}")
+        DownloadingInfo.on_task_finish(task)
         pass
 
     async def on_task_error(self, task):

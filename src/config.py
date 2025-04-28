@@ -27,3 +27,7 @@ def load_config(path: str) -> dict:
     init_path(download_path)
     config["download"]["path"] = download_path.absolute().as_posix()
     return config
+
+def get_id_cache_path(chat_id) -> Path:
+    return DATA_PATH / ".id_cache" / f"{chat_id}.bin"
+
