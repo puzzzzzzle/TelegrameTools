@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import logging
 from telethon import TelegramClient
 
@@ -38,7 +39,18 @@ class TGTools:
         """
         下载媒体文件
         """
-        await chat_media_downloader.download_by_config(self.client,self.config)
+        if args.forever:
+            while True:
+                try:
+                    logger.info("Starting download check ...")
+                    await chat_media_downloader.download_by_config(self.client,self.config)
+                except Exception as e:
+                    logger.error(f"Error occurred: {e}")
+                    logger.exception(e)
+                await asyncio.sleep(60 * 60 * 6) # sleep for 6 hours
+                # await asyncio.sleep(60 * 3)
+        else:
+            await chat_media_downloader.download_by_config(self.client,self.config)
 
     def create_args(self):
         # 配置argparse
@@ -66,6 +78,11 @@ class TGTools:
             nargs='*',
             type=int,
             help='Dialog ID to download from, if empty, download all from config'
+        )
+        parser_download.add_argument(
+            '--forever',
+            action='store_true',
+            help='forever download'
         )
         parser_download.set_defaults(func=self.download_media)
         return parser

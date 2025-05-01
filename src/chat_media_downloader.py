@@ -165,7 +165,7 @@ class ChatMediaDownloader:
                 f"target file exists but size not match, redownload {target_save_path.stat().st_size}/{media_size}: {target_save_path}")
             target_save_path.unlink(missing_ok=True)
 
-        task = MediaDownloadTask(msg_id, 3, 60, self.chat_id, self.chat_name, media_name, message, target_save_path,
+        task = MediaDownloadTask(msg_id, 3, 180, self.chat_id, self.chat_name, media_name, message, target_save_path,
                                  tag)
         await self.download_worker.push_download_task(task)
         return False
@@ -211,7 +211,7 @@ class ChatMediaDownloader:
 
 async def download_by_config(client: TelegramClient, config: dict):
     dialogs: dict[str, str] = await utils.get_dialogs(client, use_cache=True)
-    download_worker = DownloadWorkerMng(config)
+    download_worker = DownloadWorkerMng(config,max_parallel=2)
     download_worker.start(client)
     downloaders = []
     for key, chat_config in config["download"]["chats_to_download"].items():
