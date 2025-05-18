@@ -68,15 +68,33 @@ class MediaDownloadTask(DownloadTaskBase):
         async def download_with_timeout():
             task = asyncio.create_task(
                 client.download_media(message.media, temp_path.as_posix(), progress_callback=callback))
-            while True:
-                # 检查是否超时
-                if asyncio.get_event_loop().time() - last_progress_time > self.no_data_recv_time:
-                    raise asyncio.TimeoutError("long time not recv data, canceled")
-                # 检查任务是否完成
+            try:
+                while True:
+                    # 使用wait同时等待任务完成和超时检查
+                    done, pending = await asyncio.wait(
+                        [task],
+                        timeout=1,  # 缩短检查间隔到1秒
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    # 如果任务已完成
+                    if task.done():
+                        # 主动获取结果以抛出可能存在的异常
+                        task.result()
+                        break
+
+                    # 检查超时
+                    if asyncio.get_event_loop().time() - last_progress_time > self.no_data_recv_time:
+                        raise asyncio.TimeoutError("long time not recv data, canceled")
+
+            except Exception as e:
+                task.cancel()  # 确保取消正在运行的任务
+                logger.info(f"download fail {e} target_path:{file_path}")
+                raise
+            finally:
                 if not task.done():
-                    await asyncio.sleep(10)
-                else:
-                    break
+                    task.cancel()
+                    await task  # 等待任务取消完成
 
         await download_with_timeout()
         # 移动到目标路径
