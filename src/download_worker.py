@@ -5,23 +5,23 @@ import json
 import logging
 import math
 import threading
+import time
 from pathlib import Path
+from pprint import pformat
 from typing import Callable
 import pickle
 
 from telethon import TelegramClient
 
-from . import config as cfg
-from .config import DATA_PATH,get_id_cache_path
+from .config import DATA_PATH, get_id_cache_path
 
 logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
 class DownloadingInfo:
-    max_finished_id:int = 0
-    downloading_ids:list[int]= dataclasses.field(default_factory=list)
-
+    max_finished_id: int = 0
+    downloading_ids: list[int] = dataclasses.field(default_factory=list)
 
     def save_to_file(self, file_path: str | Path):
         """
@@ -30,7 +30,6 @@ class DownloadingInfo:
         """
         with open(file_path, 'wb') as f:
             pickle.dump(self, f)
-
 
     @classmethod
     def load_from_file(cls, file_path: str | Path) -> "DownloadingInfo":
@@ -44,28 +43,31 @@ class DownloadingInfo:
             return cls()
         with open(file_path, 'rb') as f:
             return pickle.load(f)
+
     @classmethod
-    def on_task_finish(cls,task):
+    def on_task_finish(cls, task):
         msg_id = task.msg_id
         file_path = get_id_cache_path(task.chat_id)
-        return cls.on_task_finish_impl(msg_id,file_path)
+        return cls.on_task_finish_impl(msg_id, file_path)
+
     @classmethod
-    def on_task_finish_impl(cls,msg_id,file_path):
+    def on_task_finish_impl(cls, msg_id, file_path):
         try:
             s = DownloadingInfo.load_from_file(file_path)
             try:
                 s.downloading_ids.remove(msg_id)
             except ValueError:
                 pass
-            if msg_id>s.max_finished_id:
-                s.max_finished_id=msg_id
+            if msg_id > s.max_finished_id:
+                s.max_finished_id = msg_id
             s.save_to_file(file_path)
         except Exception as e:
             logger.error(f"save to file error: {e}")
             logger.exception(e)
         pass
+
     @classmethod
-    def on_task_create(cls,task):
+    def on_task_create(cls, task):
         msg_id = task.msg_id
         file_path = get_id_cache_path(task.chat_id)
         try:
@@ -76,6 +78,8 @@ class DownloadingInfo:
             logger.error(f"save to file error: {e}")
             logger.exception(e)
         pass
+
+
 class DownloadTaskBase:
     """
     下载任务
@@ -307,6 +311,36 @@ class DownloadWorkerMng:
         task.task_id = self.last_task_id
         await self.downloading_tasks.put(task)
         await self.on_task_create(task)
+
+    async def download_direct(self, task: DownloadTaskBase, client,chat_name):
+        """
+        直接下载, 不经过下载管理器
+        :param task:
+        :return:
+        """
+        last_log_time = time.time()
+        def on_task_net_stat_event(task_id: int, task_tag: str, start_time: datetime.datetime,
+                                   last_recv_time: datetime.datetime, recv_bytes: int,
+                                   total_bytes: int):
+            # 每 5s 输出下信息
+            nonlocal last_log_time
+            if time.time() - last_log_time > 10:
+                last_log_time = time.time()
+                status_show = {
+                    "task_tag": task_tag,
+                    "time_use": str(datetime.datetime.now() - start_time),
+                    "last_recv_time": last_recv_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "progress": f'{recv_bytes / total_bytes:.2%} ({recv_bytes / 1024 / 1024:.2f} MB / {total_bytes / 1024 / 1024:.2f} MB)',
+                }
+                logger.info(f"\n{chat_name} stat:\n {pformat(status_show)}")
+        await self.on_task_create(task)
+        try:
+            task.on_downloader_net_callback = on_task_net_stat_event
+            await task.download(client)
+            await self.on_task_finished(task)
+        except Exception as e:
+            logger.error(f"err {task} with {e}")
+            await self.on_task_error(task)
 
     async def on_task_create(self, task):
         logger.info(f"+++ {task} ; stat: {self.simple_stat()}")

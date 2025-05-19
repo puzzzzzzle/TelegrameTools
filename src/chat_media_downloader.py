@@ -70,23 +70,16 @@ class MediaDownloadTask(DownloadTaskBase):
                 client.download_media(message.media, temp_path.as_posix(), progress_callback=callback))
             try:
                 while True:
-                    # 使用wait同时等待任务完成和超时检查
-                    done, pending = await asyncio.wait(
-                        [task],
-                        timeout=1,  # 缩短检查间隔到1秒
-                        return_when=asyncio.FIRST_COMPLETED
-                    )
-
-                    # 如果任务已完成
-                    if task.done():
-                        # 主动获取结果以抛出可能存在的异常
-                        task.result()
-                        break
-
-                    # 检查超时
+                    # 检查是否超时
                     if asyncio.get_event_loop().time() - last_progress_time > self.no_data_recv_time:
                         raise asyncio.TimeoutError("long time not recv data, canceled")
-
+                    # 检查任务是否完成
+                    if not task.done():
+                        await asyncio.sleep(1)
+                    else:
+                        # 获取结果以检查是否出错
+                        task.result()
+                        break
             except Exception as e:
                 task.cancel()  # 确保取消正在运行的任务
                 logger.info(f"download fail {e} target_path:{file_path}")
@@ -185,7 +178,7 @@ class ChatMediaDownloader:
 
         task = MediaDownloadTask(msg_id, 3, 180, self.chat_id, self.chat_name, media_name, message, target_save_path,
                                  tag)
-        await self.download_worker.push_download_task(task)
+        await self.download_worker.download_direct(task, client=self.client, chat_name=self.chat_name)
         return False
 
     async def create_all_download_tasks(self):
@@ -210,7 +203,7 @@ class ChatMediaDownloader:
         tmp_ids: list[int] = copy.deepcopy(s.downloading_ids)
         tmp_ids.append(s.max_finished_id)
         min_id = min(tmp_ids)
-        min_id = max(0, min_id - 5) # 防止漏
+        min_id = max(0, min_id - 5)  # 防止漏
         logger.info(f"{self.chat_name}:  min_id: {min_id}")
         s.max_finished_id = min_id
         s.downloading_ids.clear()
@@ -229,7 +222,7 @@ class ChatMediaDownloader:
 
 async def download_by_config(client: TelegramClient, config: dict):
     dialogs: dict[str, str] = await utils.get_dialogs(client, use_cache=True)
-    download_worker = DownloadWorkerMng(config,max_parallel=2)
+    download_worker = DownloadWorkerMng(config, max_parallel=2)
     download_worker.start(client)
     downloaders = []
     for key, chat_config in config["download"]["chats_to_download"].items():
@@ -252,7 +245,12 @@ async def download_by_config(client: TelegramClient, config: dict):
         curr_chat_downloader = ChatMediaDownloader(client, config, int(chat_id), chat_name, chat_config,
                                                    download_worker)
         downloaders.append(curr_chat_downloader)
-    await asyncio.gather(*[x.create_all_download_tasks() for x in downloaders])
+    wait_stop = []
+    for downloader in downloaders:
+        task = asyncio.create_task(downloader.create_all_download_tasks())
+        wait_stop.append(task)
+    await asyncio.gather(*wait_stop)
+    # await asyncio.gather(*[x.create_all_download_tasks() for x in downloaders])
     # 等待下载完毕
     while not download_worker.is_all_done():
         await asyncio.sleep(10)
