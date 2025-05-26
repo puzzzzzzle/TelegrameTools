@@ -128,86 +128,63 @@ class MediaDownloadTask(object):
         temp_path = cfg.TEMP_PATH / (file_name + ".tmp")
         temp_path.parent.mkdir(parents=True, exist_ok=True)
 
-        downloaded_bytes = 0
-        if temp_path.exists():
-            downloaded_bytes = temp_path.stat().st_size
+        # 断点续传起点，已下载字节数
+        offset = temp_path.stat().st_size if temp_path.exists() else 0
 
-        if hasattr(message.media, 'document'):
-            document = message.media.document
-        else:
-            raise ValueError("Media does not contain a document")
-
-        total_size = document.size
-
-        location = InputDocumentFileLocation(
-            id=document.id,
-            access_hash=document.access_hash,
-            file_reference=document.file_reference,
-            thumb_size=""
-        )
-
-        chunk_size = 512 * 1024  # 512KB
+        logger.info(f"Start downloading {file_path} from offset {offset}")
         start_time = datetime.datetime.now()
+
         last_progress_time = asyncio.get_event_loop().time()
 
-        # 记录当前 DC
-        original_dc = client.session.dc_id
-        target_dc = getattr(document, 'dc_id', original_dc)  # 文件所在 DC
+        def callback(current, total):
+            nonlocal last_progress_time
+            last_progress_time = asyncio.get_event_loop().time()
+            logger.debug(f"{file_path} : {current} / {total}")
+            if self.on_downloader_net_callback is not None:
+                self.on_downloader_net_callback(
+                    self.task_id,
+                    f"{self.chat_name} - {file_path.name} - {self.tag}",
+                    start_time,
+                    datetime.datetime.now(),
+                    current,
+                    total
+                )
 
-        # 如果文件不在当前 DC，切换
-        if target_dc != original_dc:
-            await client._switch_dc(target_dc)
+        # 获取文件大小（如果能获取）
+        file_size = None
+        if message.media and hasattr(message.media, 'document') and message.media.document:
+            file_size = message.media.document.size
 
-        try:
-            with open(temp_path, 'ab') as f:
-                while downloaded_bytes < total_size:
-                    if asyncio.get_event_loop().time() - last_progress_time > self.no_data_recv_time:
-                        raise asyncio.TimeoutError("long time not recv data, canceled")
+        # 以追加模式打开临时文件
+        with open(temp_path, 'ab') as f:
+            # 迭代下载，从offset开始
+            stream = client.iter_download(
+                message.media,
+                offset=offset,
+                chunk_size=512 * 1024,
+                file_size=file_size
+            )
 
-                    bytes_to_download = min(chunk_size, total_size - downloaded_bytes)
+            try:
+                while True:
+                    # 给每个 chunk 的接收设置超时，比如 100 秒
+                    chunk = await asyncio.wait_for(stream.__anext__(), timeout=100)
+                    f.write(chunk)
+                    offset += len(chunk)
+                    callback(offset, file_size or 0)
+            except StopAsyncIteration:
+                # 下载完成
+                pass
+            except asyncio.TimeoutError:
+                # 超时处理
+                logger.error("Chunk download timeout")
+                await stream.aclose()  # 关闭异步生成器，释放资源
+                raise
 
-                    try:
-                        # result = await client(GetFileRequest(
-                        #     location=location,
-                        #     offset=downloaded_bytes,
-                        #     limit=bytes_to_download
-                        # ))
-                        await client.download_media(message, temp_path)
-                    except FileMigrateError as e:
-                        # 如果 DC 迁移错误，更新 target_dc 并切换
-                        target_dc = e.new_dc
-                        await client._switch_dc(target_dc)
-                        continue  # 重新尝试下载
-                    except Exception as e:
-                        logger.info(f"download fail {e} target_path:{file_path}")
-                        raise
-
-                    if not result.bytes:
-                        break
-
-                    f.write(result.bytes)
-                    downloaded_bytes += len(result.bytes)
-                    last_progress_time = asyncio.get_event_loop().time()
-
-                    if self.on_downloader_net_callback is not None:
-                        self.on_downloader_net_callback(
-                            self.task_id,
-                            f"{self.chat_name} - {self.file_path.name} - {self.tag}",
-                            start_time,
-                            datetime.datetime.now(),
-                            downloaded_bytes,
-                            total_size
-                        )
-
-                    logger.debug(f"Downloaded {downloaded_bytes} / {total_size} bytes")
-        finally:
-            # 下载完成或异常后切回原 DC
-            if client.session.dc_id != original_dc:
-                await client._switch_dc(original_dc)
-
+        # 下载完成，重命名临时文件到目标路径
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path.rename(file_path.as_posix())
-        logger.info(f"end {file_path}")
+        temp_path.rename(file_path)
+        logger.info(f"Download finished: {file_path}")
 
     async def download_direct(self, client, chat_name):
         """
