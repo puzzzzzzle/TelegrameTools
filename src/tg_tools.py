@@ -47,7 +47,7 @@ class TGTools:
                 except Exception as e:
                     logger.error(f"Error occurred: {e}")
                     logger.exception(e)
-                await asyncio.sleep(60 * 60 * 6) # sleep for 6 hours
+                await asyncio.sleep(args.sleep_time)
                 # await asyncio.sleep(60 * 3)
         else:
             await chat_media_downloader.download_by_config(self.client,self.config)
@@ -83,6 +83,12 @@ class TGTools:
             '--forever',
             action='store_true',
             help='forever download'
+        )
+        parser_download.add_argument(
+            '--sleep_time',
+            type=int,
+            help='forever download wait time',
+            default=60 * 60 * 6
         )
         parser_download.set_defaults(func=self.download_media)
         return parser
