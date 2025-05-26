@@ -229,12 +229,13 @@ class ChatMediaDownloader:
    下载器
     """
 
-    def __init__(self, client: TelegramClient, config: dict, chat_id: int, chat_name: str, self_config: dict):
+    def __init__(self, client: TelegramClient, config: dict, chat_id: int, chat_name: str, self_config: dict,parallel:int):
         self.client = client
         self.config = config
         self.chat_id = chat_id
         self.chat_name = chat_name
         self.self_config = self_config
+        self.parallel = parallel
 
         chat_title = config["download"]["file_path_prefix"]["chat_title"]
         assert isinstance(chat_title, bool)
@@ -349,7 +350,6 @@ class ChatMediaDownloader:
 
 async def download_by_config(client: TelegramClient, config: dict, parallel=1):
     dialogs: dict[str, str] = await utils.get_dialogs(client, use_cache=True)
-    downloaders = []
     for key, chat_config in config["download"]["chats_to_download"].items():
         if key in dialogs:
             chat_id = key
@@ -367,8 +367,7 @@ async def download_by_config(client: TelegramClient, config: dict, parallel=1):
                 logger.warning(f"multiple matching keys found: {matching_keys}, use {chat_id} instead")
 
         # 创建下载任务
-        curr_chat_downloader = ChatMediaDownloader(client, config, int(chat_id), chat_name, chat_config)
-        downloaders.append(curr_chat_downloader)
+        curr_chat_downloader = ChatMediaDownloader(client, config, int(chat_id), chat_name, chat_config,parallel)
         await curr_chat_downloader.download_all_media()
     # wait_stop = []
     # for downloader in downloaders:
