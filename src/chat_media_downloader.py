@@ -337,18 +337,30 @@ class ChatMediaDownloader:
         s.down_fail_ids.clear()
         s.save_to_file(info_path)
         # 获取对话中的消息
+        semaphore = asyncio.Semaphore(self.parallel)  # 限制最大并发
+
+        async def sem_download_msg(message, progress_str):
+            async with semaphore:
+                try:
+                    already_finished = await self.download_msg(message, progress_str)
+                    if already_finished:
+                        DownloadingInfo.on_task_finish_impl(message.id, get_id_cache_path(self.chat_id), True)
+                except Exception as e:
+                    logger.error(f"download fail {e}")
+
         count = min_id
+        tasks = []
         async for message in client.iter_messages(chat, reverse=True, min_id=min_id):
             count += 1
-            try:
-                already_finished = await self.download_msg(message, f"{count}/{total_messages}")
-                if already_finished:
-                    DownloadingInfo.on_task_finish_impl(message.id, get_id_cache_path(self.chat_id), True)
-            except Exception as e:
-                logger.error(f"download fail {e}")
+            progress_str = f"{count}/{total_messages}"
+            task = asyncio.create_task(sem_download_msg(message, progress_str))
+            tasks.append(task)
+
+        # 等待所有任务完成
+        await asyncio.gather(*tasks)
 
 
-async def download_by_config(client: TelegramClient, config: dict, parallel=1):
+async def download_by_config(client: TelegramClient, config: dict, parallel=5):
     dialogs: dict[str, str] = await utils.get_dialogs(client, use_cache=True)
     for key, chat_config in config["download"]["chats_to_download"].items():
         if key in dialogs:

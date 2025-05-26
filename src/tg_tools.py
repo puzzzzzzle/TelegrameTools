@@ -90,6 +90,12 @@ class TGTools:
             help='forever download wait time',
             default=60 * 60 * 6
         )
+        parser_download.add_argument(
+            '--parallel',
+            type=int,
+            help='parallel download num',
+            default=3
+        )
         parser_download.set_defaults(func=self.download_media)
         return parser
 
