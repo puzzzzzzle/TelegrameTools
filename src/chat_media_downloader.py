@@ -20,6 +20,8 @@ from .config import get_id_cache_path
 
 logger = logging.getLogger(__name__)
 
+download_info_cache: "DownloadingInfo" | None = None
+
 
 @dataclasses.dataclass
 class DownloadingInfo:
@@ -45,12 +47,16 @@ class DownloadingInfo:
         :param file_path: 文件读取路径
         :return: DownloadingInfo实例
         """
+        global download_info_cache
+        if download_info_cache is not None:
+            return download_info_cache
         file_path = Path(file_path)
         if not file_path.exists():
             return cls()
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        return cls(**data)
+        download_info_cache = cls(**data)
+        return download_info_cache
 
     @classmethod
     def on_task_finish(cls, task, is_success: bool):
