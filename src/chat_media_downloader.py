@@ -20,8 +20,6 @@ from .config import get_id_cache_path
 
 logger = logging.getLogger(__name__)
 
-download_info_cache: "DownloadingInfo" | None = None
-
 
 @dataclasses.dataclass
 class DownloadingInfo:
@@ -47,9 +45,6 @@ class DownloadingInfo:
         :param file_path: 文件读取路径
         :return: DownloadingInfo实例
         """
-        global download_info_cache
-        if download_info_cache is not None:
-            return download_info_cache
         file_path = Path(file_path)
         if not file_path.exists():
             return cls()
@@ -172,11 +167,12 @@ class MediaDownloadTask(object):
                     bytes_to_download = min(chunk_size, total_size - downloaded_bytes)
 
                     try:
-                        result = await client(GetFileRequest(
-                            location=location,
-                            offset=downloaded_bytes,
-                            limit=bytes_to_download
-                        ))
+                        # result = await client(GetFileRequest(
+                        #     location=location,
+                        #     offset=downloaded_bytes,
+                        #     limit=bytes_to_download
+                        # ))
+                        await client.download_media(message, temp_path)
                     except FileMigrateError as e:
                         # 如果 DC 迁移错误，更新 target_dc 并切换
                         target_dc = e.new_dc
@@ -348,7 +344,7 @@ class ChatMediaDownloader:
         # 获取目标对话
         client = self.client
         target_chat = self.chat_id
-        logger.info(f"start create tasks for {self.chat_name}")
+        logger.info(f"start create tasks for {self.chat_name} id: {target_chat}")
         chat = await client.get_entity(target_chat)
 
         # 获取对话中的消息总数
@@ -367,6 +363,7 @@ class ChatMediaDownloader:
         logger.info(f"{self.chat_name}:  min_id: {min_id}")
         s.max_finished_id = min_id
         s.downloading_ids.clear()
+        s.down_fail_ids.clear()
         s.save_to_file(info_path)
         # 获取对话中的消息
         count = min_id
@@ -375,7 +372,7 @@ class ChatMediaDownloader:
             try:
                 already_finished = await self.download_msg(message, f"{count}/{total_messages}")
                 if already_finished:
-                    DownloadingInfo.on_task_finish_impl(message.id, get_id_cache_path(self.chat_id))
+                    DownloadingInfo.on_task_finish_impl(message.id, get_id_cache_path(self.chat_id),True)
             except Exception as e:
                 logger.error(f"download fail {e}")
 

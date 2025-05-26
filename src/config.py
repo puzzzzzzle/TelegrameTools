@@ -29,5 +29,5 @@ def load_config(path: str) -> dict:
     return config
 
 def get_id_cache_path(chat_id) -> Path:
-    return DATA_PATH / ".id_cache" / f"{chat_id}.json"
+    return (DATA_PATH / ".id_cache" / f"{chat_id}.json").absolute()
 
