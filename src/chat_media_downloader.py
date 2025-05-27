@@ -1,6 +1,7 @@
 import copy
 import asyncio
 import datetime
+import re
 import time
 from pprint import pformat
 from telethon import TelegramClient
@@ -10,12 +11,23 @@ import dataclasses
 import json
 from pathlib import Path
 
-
 from . import utils
 from . import config as cfg
 from .config import get_id_cache_path
 
 logger = logging.getLogger(__name__)
+
+
+def is_telegram_message_link(text: str) -> bool:
+    pattern = r'https?://(t\.me|telegram\.me)/[\w\d_]+/\d+'
+    return re.match(pattern, text) is not None
+
+
+def message_is_telegram_link(message) -> bool:
+    # message: Telethon Message 对象
+    if hasattr(message, 'message') and message.message:
+        return is_telegram_message_link(message.message.strip())
+    return False
 
 
 @dataclasses.dataclass
@@ -94,12 +106,10 @@ class MediaDownloadTask(object):
     下载任务
     """
 
-    def __init__(self, msg_id, max_retry_count, no_data_recv_time: int, chat_id: int, chat_name: str, file_name: str,
+    def __init__(self, chat_id, msg_id, chat_name: str, file_name: str,
                  message,
                  file_path: Path, tag: str):
         self.retry_count = 0
-        self.max_retry_count = max_retry_count
-        self.no_data_recv_time = no_data_recv_time
         self.msg_id = msg_id
         self.chat_id = chat_id
         self.task_id = None
@@ -121,7 +131,7 @@ class MediaDownloadTask(object):
         message = self.message
         file_path = self.file_path
 
-        temp_path = cfg.TEMP_PATH / (file_name + ".tmp")
+        temp_path = cfg.TEMP_PATH / self.chat_name / (file_name + ".tmp")
         temp_path.parent.mkdir(parents=True, exist_ok=True)
 
         # 断点续传起点，已下载字节数
@@ -177,8 +187,8 @@ class MediaDownloadTask(object):
     def on_task_net_stat_event(self, file_path,
                                recv_bytes: int,
                                total_bytes: int,
-                               time_use:float,
-                               time_recv:int):
+                               time_use: float,
+                               time_recv: int):
         try:
             if time.time() - self.last_log_time > 10:
                 self.last_log_time = time.time()
@@ -189,7 +199,7 @@ class MediaDownloadTask(object):
                     "progress": f'{recv_bytes / total_bytes:.2%} ({recv_bytes / 1024 / 1024:.2f} MB / {total_bytes / 1024 / 1024:.2f} MB)',
                     "speed": f'{(time_recv / 1024 / time_use):.5f} KB/s',
                 }
-                logger.info(f"\n{pformat(status_show)}\n")
+                logger.info(f"\n{status_show['task_tag']} status:\n{pformat(status_show)}\n")
         except Exception as e:
             logger.info(f"on downloader net callback error: {e}", exc_info=True)
 
@@ -226,7 +236,8 @@ class ChatMediaDownloader:
    下载器
     """
 
-    def __init__(self, client: TelegramClient, config: dict, chat_id: int, chat_name: str, self_config: dict,parallel:int):
+    def __init__(self, client: TelegramClient, config: dict, chat_id: int, chat_name: str, self_config: dict,
+                 parallel: int):
         self.client = client
         self.config = config
         self.chat_id = chat_id
@@ -261,7 +272,27 @@ class ChatMediaDownloader:
 
         return name, media_type, media_size
 
-    async def download_msg(self, message, tag: str) -> bool:
+    async def download_by_link(self, message, tag: str) -> bool:
+        try:
+            # 解析链接
+            match = re.match(r'https://t.me/([^/]+)/(\d+)', message.message.strip())
+            if not match:
+                raise ValueError('wrong link format')
+            entity = match.group(1)
+            message_id = int(match.group(2))
+            # 获取频道/群组实体
+            chat = await self.client.get_entity(entity)
+            # 获取消息
+            msg = await self.client.get_messages(chat, ids=message_id)
+            if message_is_telegram_link(msg):
+                # 不允许还是链接, 防止死循环
+                return True
+            return await self.download_msg(msg, tag, message.id)
+        except Exception as e:
+            logger.error(e, exc_info=True)
+            raise
+
+    async def download_msg(self, message, tag: str, specific_name_id: int | None = None) -> bool:
         download_path = Path(self.config["download"]["path"])
         # 获取基础信息
         msg_id = message.id
@@ -274,6 +305,8 @@ class ChatMediaDownloader:
             pass
         elif message.media:
             name, media_type, media_size = self.get_media_meta(message)
+        elif message_is_telegram_link(message):
+            return await self.download_by_link(message, tag)
         else:
             return True
         if name is None:
@@ -281,6 +314,8 @@ class ChatMediaDownloader:
         # 类型过滤
         if "all" not in self.media_types and media_type not in self.media_types:
             return True
+        if specific_name_id is not None:
+            msg_id = specific_name_id
 
         target_path = download_path / self.chat_name
         if self.media_datetime != "":
@@ -299,7 +334,7 @@ class ChatMediaDownloader:
                 f"target file exists but size not match, try continue {target_save_path.stat().st_size}/{media_size}: {target_save_path}")
             target_save_path.unlink(missing_ok=True)
 
-        task = MediaDownloadTask(msg_id, 3, 180, self.chat_id, self.chat_name, media_name, message, target_save_path,
+        task = MediaDownloadTask(self.chat_id, msg_id, self.chat_name, media_name, message, target_save_path,
                                  tag)
         await task.download_direct(client=self.client)
         return False
@@ -347,6 +382,7 @@ class ChatMediaDownloader:
 
         count = min_id
         tasks = []
+
         async for message in client.iter_messages(chat, reverse=True, min_id=min_id):
             count += 1
             progress_str = f"{count}/{total_messages}"
@@ -376,7 +412,7 @@ async def download_by_config(client: TelegramClient, config: dict, parallel=5):
                 logger.warning(f"multiple matching keys found: {matching_keys}, use {chat_id} instead")
 
         # 创建下载任务
-        curr_chat_downloader = ChatMediaDownloader(client, config, int(chat_id), chat_name, chat_config,parallel)
+        curr_chat_downloader = ChatMediaDownloader(client, config, int(chat_id), chat_name, chat_config, parallel)
         await curr_chat_downloader.download_all_media()
     # wait_stop = []
     # for downloader in downloaders:
