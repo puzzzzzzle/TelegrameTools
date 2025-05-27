@@ -189,7 +189,7 @@ class MediaDownloadTask(object):
                     "progress": f'{recv_bytes / total_bytes:.2%} ({recv_bytes / 1024 / 1024:.2f} MB / {total_bytes / 1024 / 1024:.2f} MB)',
                     "speed": f'{(time_recv / 1024 / time_use):.5f} KB/s',
                 }
-                logger.info(f"\n{self.chat_name} stat:\n {pformat(status_show)}")
+                logger.info(f"\n{pformat(status_show)}\n")
         except Exception as e:
             logger.info(f"on downloader net callback error: {e}", exc_info=True)
 
