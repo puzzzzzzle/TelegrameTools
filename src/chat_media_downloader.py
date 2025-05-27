@@ -19,8 +19,6 @@ logger = logging.getLogger(__name__)
 
 
 def is_telegram_message_link(text: str) -> bool:
-    if not text.endswith("?single"):
-        return False
     pattern = r'https?://(t\.me|telegram\.me)/[\w\d_]+/\d+'
     return re.match(pattern, text) is not None
 
