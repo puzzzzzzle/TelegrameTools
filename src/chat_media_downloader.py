@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 def is_telegram_message_link(text: str) -> bool:
+    if not text.endswith("?single"):
+        return False
     pattern = r'https?://(t\.me|telegram\.me)/[\w\d_]+/\d+'
     return re.match(pattern, text) is not None
 
@@ -69,6 +71,11 @@ class DownloadingInfo:
         return cls.on_task_finish_impl(msg_id, file_path, is_success)
 
     @classmethod
+    def on_task_finish(cls, msg_id, chat_id, is_success: bool):
+        file_path = get_id_cache_path(chat_id)
+        return cls.on_task_finish_impl(msg_id, file_path, is_success)
+
+    @classmethod
     def on_task_finish_impl(cls, msg_id, file_path, is_success: bool):
         try:
             s = DownloadingInfo.load_from_file(file_path)
@@ -108,7 +115,7 @@ class MediaDownloadTask(object):
 
     def __init__(self, chat_id, msg_id, chat_name: str, file_name: str,
                  message,
-                 file_path: Path, tag: str):
+                 file_path: Path, tag: str, need_record_finish: bool = True):
         self.retry_count = 0
         self.msg_id = msg_id
         self.chat_id = chat_id
@@ -120,6 +127,7 @@ class MediaDownloadTask(object):
         self.tag = tag
         self.last_log_time = time.time()
         self.start_time = datetime.datetime.now()
+        self.need_record_finish = need_record_finish
 
         pass
 
@@ -211,7 +219,8 @@ class MediaDownloadTask(object):
         await self.on_task_create()
         try:
             await self.download(client)
-            await self.on_task_finished()
+            if self.need_record_finish:
+                await self.on_task_finished()
         except Exception as e:
             logger.error(f"err {self} with {e}")
             await self.on_task_error()
@@ -287,12 +296,26 @@ class ChatMediaDownloader:
             if message_is_telegram_link(msg):
                 # 不允许还是链接, 防止死循环
                 return True
-            return await self.download_msg(msg, tag, message.id)
+            if msg.grouped_id is not None:
+                # 获取同组的所有消息(最多检查 30 条)
+                messages = await self.client.get_messages(entity, ids=range(max(message_id - 20, 0), message_id + 20))
+                # 过滤出同一个 grouped_id 的消息
+                album_msgs = [curr for curr in messages if curr is not None and msg.grouped_id == curr.grouped_id]
+                logger.info(f"message group all is {album_msgs}")
+                all_result = []
+                for i, group_msg in enumerate(album_msgs, 1):
+                    ret = await self.download_msg(group_msg, tag, message.id, f" - g{group_msg.id}", False)
+                    all_result.append(ret)
+                # 结束后统一记录当前消息完成
+                DownloadingInfo.on_task_finished(message.id, self.chat_id)
+                return all(all_result)
+            return await self.download_msg(msg, tag, message.id, f" - g{msg.id}")
         except Exception as e:
             logger.error(e, exc_info=True)
             raise
 
-    async def download_msg(self, message, tag: str, specific_name_id: int | None = None) -> bool:
+    async def download_msg(self, message, tag: str, specific_name_id: int | None = None, name_extra="",
+                           need_record_finish=True) -> bool:
         download_path = Path(self.config["download"]["path"])
         # 获取基础信息
         msg_id = message.id
@@ -321,7 +344,7 @@ class ChatMediaDownloader:
         if self.media_datetime != "":
             target_path = target_path / date.strftime(self.media_datetime)
         target_path.mkdir(parents=True, exist_ok=True)
-        media_name = f"{msg_id} - {name}"
+        media_name = f"{msg_id}{name_extra} - {name}"
         target_save_path = target_path / media_name
 
         # 检查文件是否已经存在
@@ -335,7 +358,7 @@ class ChatMediaDownloader:
             target_save_path.unlink(missing_ok=True)
 
         task = MediaDownloadTask(self.chat_id, msg_id, self.chat_name, media_name, message, target_save_path,
-                                 tag)
+                                 tag, need_record_finish)
         await task.download_direct(client=self.client)
         return False
 
@@ -393,7 +416,7 @@ class ChatMediaDownloader:
         await asyncio.gather(*tasks)
 
 
-async def download_by_config(client: TelegramClient, config: dict, parallel=5):
+async def download_by_config(client: TelegramClient, config: dict, parallel=1):
     dialogs: dict[str, str] = await utils.get_dialogs(client, use_cache=True)
     for key, chat_config in config["download"]["chats_to_download"].items():
         if key in dialogs:
