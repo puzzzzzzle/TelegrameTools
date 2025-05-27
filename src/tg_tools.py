@@ -74,12 +74,6 @@ class TGTools:
         # 添加download子命令
         parser_download = subparsers.add_parser('download', help=self.download_media.__doc__)
         parser_download.add_argument(
-            'dialog_id',
-            nargs='*',
-            type=int,
-            help='Dialog ID to download from, if empty, download all from config'
-        )
-        parser_download.add_argument(
             '--forever',
             action='store_true',
             help='forever download'

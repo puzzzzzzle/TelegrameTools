@@ -3,16 +3,13 @@ import asyncio
 import datetime
 import time
 from pprint import pformat
-from typing import Callable
 from telethon import TelegramClient
 import logging
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, DocumentAttributeFilename
 import dataclasses
 import json
 from pathlib import Path
-from telethon.tl.functions.upload import GetFileRequest
-from telethon.tl.types import InputDocumentFileLocation
-from telethon.errors.rpcerrorlist import FileMigrateError
+
 
 from . import utils
 from . import config as cfg
@@ -158,7 +155,7 @@ class MediaDownloadTask(object):
                     self.on_task_net_stat_event(
                         file_path,
                         offset,
-                        file_size,
+                        file_size if file_size is not None else 1,
                         time_use,
                         len(chunk)
                     )
@@ -194,7 +191,7 @@ class MediaDownloadTask(object):
                 }
                 logger.info(f"\n{self.chat_name} stat:\n {pformat(status_show)}")
         except Exception as e:
-            logger.error(f"on downloader net callback error: {e}")
+            logger.info(f"on downloader net callback error: {e}", exc_info=True)
 
     async def download_direct(self, client):
         """
