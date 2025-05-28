@@ -294,6 +294,9 @@ class ChatMediaDownloader:
             chat = await self.client.get_entity(entity)
             # 获取消息
             msg = await self.client.get_messages(chat, ids=message_id)
+            if msg is None:
+                logger.warning(f"msg not found, maybe deleted")
+                return True
             if message_is_telegram_link(msg):
                 # 不允许还是链接, 防止死循环
                 return True
@@ -302,13 +305,13 @@ class ChatMediaDownloader:
                 messages = await self.client.get_messages(entity, ids=range(max(message_id - 20, 0), message_id + 20))
                 # 过滤出同一个 grouped_id 的消息
                 album_msgs = [curr for curr in messages if curr is not None and msg.grouped_id == curr.grouped_id]
-                logger.info(f"message group all is {album_msgs}")
+                logger.info(f"message group all len {len(album_msgs)}")
                 all_result = []
                 for i, group_msg in enumerate(album_msgs, 1):
                     ret = await self.download_msg(group_msg, tag, message.id, f" - g{group_msg.id}", False)
                     all_result.append(ret)
                 # 结束后统一记录当前消息完成
-                DownloadingInfo.on_task_finish_simple(message.id, self.chat_id,True)
+                DownloadingInfo.on_task_finish_simple(message.id, self.chat_id, True)
                 return all(all_result)
             return await self.download_msg(msg, tag, message.id, f" - g{msg.id}")
         except Exception as e:
@@ -397,12 +400,23 @@ class ChatMediaDownloader:
 
         async def sem_download_msg(message, progress_str):
             async with semaphore:
-                try:
-                    already_finished = await self.download_msg(message, progress_str)
-                    if already_finished:
-                        DownloadingInfo.on_task_finish_simple(message.id, get_id_cache_path(self.chat_id), True)
-                except Exception as e:
-                    logger.error(f"download fail {e}")
+                over_time_limit = 10
+                while True:
+                    try:
+                        already_finished = await self.download_msg(message, progress_str)
+                        if already_finished:
+                            DownloadingInfo.on_task_finish_simple(message.id, get_id_cache_path(self.chat_id), True)
+                        break
+                    except FileReferenceExpiredError as e:
+                        logger.warning(f"refresh file reference")
+                        over_time_limit -= 1
+                        if over_time_limit <= 0:
+                            raise
+                        logger.info(f"refresh file reference retry download")
+                        message = await self.client.get_messages(self.chat_id, ids=message.id)
+                    except Exception as e:
+                        logger.error(f"download fail {e}")
+                        raise
 
         count = min_id
         tasks = []
@@ -410,6 +424,8 @@ class ChatMediaDownloader:
         async for message in client.iter_messages(chat, reverse=True, min_id=min_id):
             count += 1
             progress_str = f"{count}/{total_messages}"
+            # 重新 get 一遍 message 防止过期
+            message = await self.client.get_messages(self.chat_id, ids=message.id)
             task = asyncio.create_task(sem_download_msg(message, progress_str))
             tasks.append(task)
 
