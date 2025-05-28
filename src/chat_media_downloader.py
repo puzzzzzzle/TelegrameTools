@@ -2,11 +2,13 @@ import copy
 import asyncio
 import datetime
 import re
+import shutil
 import time
 from pprint import pformat
 from telethon import TelegramClient
 import logging
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, DocumentAttributeFilename
+from telethon.errors.rpcerrorlist import FileReferenceExpiredError
 import dataclasses
 import json
 from pathlib import Path
@@ -69,7 +71,7 @@ class DownloadingInfo:
         return cls.on_task_finish_impl(msg_id, file_path, is_success)
 
     @classmethod
-    def on_task_finish(cls, msg_id, chat_id, is_success: bool):
+    def on_task_finish_simple(cls, msg_id, chat_id, is_success: bool):
         file_path = get_id_cache_path(chat_id)
         return cls.on_task_finish_impl(msg_id, file_path, is_success)
 
@@ -187,7 +189,8 @@ class MediaDownloadTask(object):
 
         # 下载完成，重命名临时文件到目标路径
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path.rename(file_path)
+        logger.info(f"will move {temp_path} to {file_path}")
+        shutil.move(str(temp_path), str(file_path))
         logger.info(f"Download finished: {file_path}")
 
     def on_task_net_stat_event(self, file_path,
@@ -305,7 +308,7 @@ class ChatMediaDownloader:
                     ret = await self.download_msg(group_msg, tag, message.id, f" - g{group_msg.id}", False)
                     all_result.append(ret)
                 # 结束后统一记录当前消息完成
-                DownloadingInfo.on_task_finished(message.id, self.chat_id)
+                DownloadingInfo.on_task_finish_simple(message.id, self.chat_id,True)
                 return all(all_result)
             return await self.download_msg(msg, tag, message.id, f" - g{msg.id}")
         except Exception as e:
@@ -397,7 +400,7 @@ class ChatMediaDownloader:
                 try:
                     already_finished = await self.download_msg(message, progress_str)
                     if already_finished:
-                        DownloadingInfo.on_task_finish_impl(message.id, get_id_cache_path(self.chat_id), True)
+                        DownloadingInfo.on_task_finish_simple(message.id, get_id_cache_path(self.chat_id), True)
                 except Exception as e:
                     logger.error(f"download fail {e}")
 
