@@ -62,12 +62,14 @@ class TGTools:
         if args.forever:
             while True:
                 try:
+                    if self.client is None:
+                        await self.start()
                     logger.info("Starting download check ...")
                     await chat_media_downloader.download_by_config(self.client, self.config)
                 except Exception as e:
-                    logger.error(f"Error occurred: {e}")
+                    logger.error(f"Error occurred: will stop client {e}")
                     logger.exception(e)
-                    await self.restart()
+                    await self.stop()
                 await asyncio.sleep(args.sleep_time)
                 # await asyncio.sleep(60 * 3)
         else:
