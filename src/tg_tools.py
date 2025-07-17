@@ -1,21 +1,42 @@
 import argparse
+import asyncio
 import logging
+import os
+
 from telethon import TelegramClient
 
 from . import utils
 from . import config as cfg
 from . import chat_media_downloader
+
 logger = logging.getLogger(__name__)
 
 
 class TGTools:
     def __init__(self):
         self.config = cfg.load_config(cfg.CONFIG_PATH)
+        self.client: TelegramClient | None = None
+
+    async def start(self) -> TelegramClient:
+        logger.info(f"Start at path {os.getcwd()}")
         config = self.config
         self.client = TelegramClient(cfg.SESSION_PATH, config["api_id"], config["api_hash"])
-
-    async def start(self):
         await self.client.start()
+        return self.client
+
+    async def stop(self):
+        logger.info(f"Stop at path {os.getcwd()}")
+        if self.client is None:
+            return
+        try:
+            await self.client.disconnect()
+        except Exception as e:
+            logger.exception(e)
+        self.client = None
+
+    async def restart(self):
+        await self.stop()
+        await self.start()
 
     async def show_dialogs(self, args):
         """
@@ -38,7 +59,19 @@ class TGTools:
         """
         下载媒体文件
         """
-        await chat_media_downloader.download_by_config(self.client,self.config)
+        if args.forever:
+            while True:
+                try:
+                    logger.info("Starting download check ...")
+                    await chat_media_downloader.download_by_config(self.client, self.config)
+                except Exception as e:
+                    logger.error(f"Error occurred: {e}")
+                    logger.exception(e)
+                    await self.restart()
+                await asyncio.sleep(args.sleep_time)
+                # await asyncio.sleep(60 * 3)
+        else:
+            await chat_media_downloader.download_by_config(self.client, self.config)
 
     def create_args(self):
         # 配置argparse
@@ -62,16 +95,26 @@ class TGTools:
         # 添加download子命令
         parser_download = subparsers.add_parser('download', help=self.download_media.__doc__)
         parser_download.add_argument(
-            'dialog_id',
-            nargs='*',
+            '--forever',
+            action='store_true',
+            help='forever download'
+        )
+        parser_download.add_argument(
+            '--sleep_time',
             type=int,
-            help='Dialog ID to download from, if empty, download all from config'
+            help='forever download wait time',
+            default=60 * 60 * 6
+        )
+        parser_download.add_argument(
+            '--parallel',
+            type=int,
+            help='parallel download num',
+            default=3
         )
         parser_download.set_defaults(func=self.download_media)
         return parser
 
     async def run_args(self, args):
-        async with self.client:
-            await self.start()
+        async with await self.start():
             # 执行对应命令
             await args.func(args)

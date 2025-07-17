@@ -5,10 +5,20 @@ import argparse
 import sys
 from src.tg_tools import TGTools
 
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s | [%(levelname)s] | %(message)s | %(name)s | %(filename)s:%(lineno)d')
+DEBUG = True
+if DEBUG:
+    log_format = '%(asctime)s | [%(levelname)s] | %(message)s | %(name)s | %(filename)s:%(lineno)d'
+    asyncio.get_event_loop().set_debug(True)
+    log_level = logging.INFO
+else:
+    log_format = '%(asctime)s | [%(levelname)s] | %(message)s'
+    log_level = logging.INFO
+
+logging.basicConfig(level=log_level,
+                    format=log_format)
 logging.getLogger("telethon").setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
+
 
 async def main():
     logger.info(f"Start at path {os.getcwd()}")
